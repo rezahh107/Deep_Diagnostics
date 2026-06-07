@@ -17,7 +17,7 @@ final class Autoloader {
                     return;
                 }
 
-                $relative = substr($class, $len);
+                $relative = ltrim(substr($class, $len), '\\/');
                 $file     = rtrim($base, '/\\') . '/' . str_replace('\\', '/', $relative) . '.php';
 
                 if ( file_exists($file) ) {
