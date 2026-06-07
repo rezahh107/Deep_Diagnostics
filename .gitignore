@@ -1,1 +1,20 @@
-Nothing should be ignored based on the provided file changes, as they only contain source code files (.php).
+```
+# Dependencies
+vendor/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Editor
+.vscode/
+.idea/
+
+# WordPress specific
+wp-content/plugins/wp-deep-diagnostics/*.log
+wp-content/plugins/wp-deep-diagnostics/vendor/
+```
