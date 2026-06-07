@@ -7,7 +7,7 @@ if ( ! defined('ABSPATH') ) {
     exit;
 }
 
-final readonly class Log_Entry {
+final class Log_Entry {
     public function __construct(
         public string $layer,
         public string $key,

@@ -46,7 +46,7 @@ final class Manager {
         ];
 
         foreach ( $hooks as $hook ) {
-            add_action($hook, fn(): void => $this->events->record($hook), 1);
+            add_action($hook, [$this->events, 'record'], 1);
         }
 
         add_filter(
