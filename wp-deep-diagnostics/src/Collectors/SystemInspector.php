@@ -35,10 +35,12 @@ final class SystemInspector {
         global $wpdb;
 
         if ( isset($wpdb) && $wpdb instanceof \wpdb ) {
+            $autoloadValues = ['yes', 'on', 'auto-on', 'auto'];
+            $placeholders = implode(',', array_fill(0, count($autoloadValues), '%s'));
             $heavy = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT option_name, LENGTH(option_value) AS size FROM {$wpdb->options} WHERE autoload = %s ORDER BY size DESC LIMIT 10",
-                    'yes'
+                    "SELECT option_name, LENGTH(option_value) AS size FROM {$wpdb->options} WHERE autoload IN ($placeholders) ORDER BY size DESC LIMIT 10",
+                    $autoloadValues
                 ),
                 ARRAY_A
             );

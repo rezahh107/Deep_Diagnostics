@@ -10,6 +10,12 @@ if ( ! defined('ABSPATH') ) {
 final class File_Logger {
     public function dir(): string {
         $upload = wp_upload_dir();
+        
+        if ( ! empty($upload['error']) ) {
+            error_log('WDDTF: wp_upload_dir() error: ' . $upload['error']);
+            return '';
+        }
+        
         $base   = trailingslashit($upload['basedir']) . 'wp-deep-diagnostics/';
 
         if ( ! file_exists($base) ) {
@@ -22,7 +28,14 @@ final class File_Logger {
     }
 
     public function saveJson(array $payload): string {
-        $path   = $this->dir() . $this->buildFilename('json');
+        $dir = $this->dir();
+        if ( empty($dir) ) {
+            return '';
+        }
+        
+        $this->cleanup(30);
+        
+        $path   = $dir . $this->buildFilename('json');
         $result = file_put_contents(
             $path,
             wp_json_encode(
@@ -41,7 +54,14 @@ final class File_Logger {
     }
 
     public function saveMarkdown(string $markdown): string {
-        $path   = $this->dir() . $this->buildFilename('md');
+        $dir = $this->dir();
+        if ( empty($dir) ) {
+            return '';
+        }
+        
+        $this->cleanup(30);
+        
+        $path   = $dir . $this->buildFilename('md');
         $result = file_put_contents($path, $markdown, LOCK_EX);
 
         if ( false === $result ) {
@@ -50,6 +70,32 @@ final class File_Logger {
         }
 
         return $path;
+    }
+    
+    private function cleanup(int $maxAgeDays = 30): void {
+        $dir = $this->dir();
+        if ( empty($dir) || ! is_dir($dir) ) {
+            return;
+        }
+
+        $now = time();
+        $maxAgeSeconds = $maxAgeDays * DAY_IN_SECONDS;
+        $files = array_merge(glob($dir . 'report-*'), glob($dir . 'log-*'));
+
+        foreach ($files as $file) {
+            if (!is_file($file)) {
+                continue;
+            }
+
+            $mtime = filemtime($file);
+            if ($mtime === false) {
+                continue;
+            }
+
+            if (($now - $mtime) > $maxAgeSeconds) {
+                @unlink($file);
+            }
+        }
     }
 
     private function buildFilename(string $extension): string {
