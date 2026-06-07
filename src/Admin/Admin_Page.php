@@ -16,13 +16,15 @@ final class Admin_Page {
     public function register(): void {
         add_action(
             'admin_menu',
-            fn(): string => add_management_page(
-                __('Deep Diagnostics', 'wp-deep-diagnostics'),
-                __('Deep Diagnostics', 'wp-deep-diagnostics'),
-                'manage_options',
-                'wp-deep-diagnostics',
-                [$this, 'render']
-            )
+            function(): void {
+                add_management_page(
+                    __('Deep Diagnostics', 'wp-deep-diagnostics'),
+                    __('Deep Diagnostics', 'wp-deep-diagnostics'),
+                    'manage_options',
+                    'wp-deep-diagnostics',
+                    [$this, 'render']
+                );
+            }
         );
 
         add_action(
