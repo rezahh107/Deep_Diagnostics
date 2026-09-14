@@ -35,9 +35,12 @@ final class Manager {
         $this->assets        = new AssetAnalyzer();
         $this->system        = new SystemInspector();
 
+        // Manager boots from the plugin's plugins_loaded callback. Earlier lifecycle hooks
+        // cannot be observed truthfully from a normal plugin, so mark our own observation
+        // start instead of registering callbacks for hooks that have already fired.
+        $this->events->recordCustom('diagnostics_boot', ['phase' => 'plugins_loaded']);
+
         $hooks = [
-            'muplugins_loaded',
-            'plugins_loaded',
             'after_setup_theme',
             'init',
             'wp_loaded',
