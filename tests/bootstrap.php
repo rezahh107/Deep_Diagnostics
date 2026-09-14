@@ -14,6 +14,24 @@ if ( ! defined('DAY_IN_SECONDS') ) {
     define('DAY_IN_SECONDS', 86400);
 }
 
+if ( ! class_exists('WP_Error') ) {
+    final class WP_Error {
+        public function __construct(
+            private string $code,
+            private string $message = '',
+        ) {
+        }
+
+        public function get_error_code(): string {
+            return $this->code;
+        }
+
+        public function get_error_message(): string {
+            return $this->message;
+        }
+    }
+}
+
 $GLOBALS['wddtf_test_actions'] = [];
 $GLOBALS['wddtf_test_filters'] = [];
 $GLOBALS['wddtf_test_upload_dir'] = sys_get_temp_dir() . '/wddtf-tests-' . getmypid();
@@ -41,7 +59,7 @@ function wp_json_encode(mixed $value, int $flags = 0, int $depth = 512): string|
 }
 
 function is_wp_error(mixed $value): bool {
-    return false;
+    return $value instanceof WP_Error;
 }
 
 function wp_upload_dir(): array {
