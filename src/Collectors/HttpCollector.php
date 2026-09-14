@@ -17,7 +17,6 @@ final class HttpCollector {
 
         $this->pending[$key] = [
             'start' => microtime(true),
-            'url'   => $url,
             'args'  => [
                 'method'   => isset($args['method']) ? sanitize_text_field((string) $args['method']) : 'GET',
                 'blocking' => isset($args['blocking']) ? (bool) $args['blocking'] : true,
@@ -44,11 +43,15 @@ final class HttpCollector {
             array_shift($this->requests);
         }
 
+        $result = is_wp_error($response)
+            ? 'wp_error:' . sanitize_text_field((string) $response->get_error_code())
+            : (is_array($response) ? array_keys($response) : gettype($response));
+
         $this->requests[] = [
             'url'      => $url,
             'duration' => $duration,
             'blocking' => $info['blocking'] ?? true,
-            'result'   => is_wp_error($response) ? $response->get_error_message() : (is_array($response) ? array_keys($response) : gettype($response)),
+            'result'   => $result,
             'args'     => $info,
         ];
     }
@@ -57,7 +60,7 @@ final class HttpCollector {
         $headers = isset($args['headers']) ? array_map('strtolower', array_keys((array) $args['headers'])) : [];
         sort($headers, SORT_STRING);
 
-        $body = $args['body'] ?? null;
+        $body     = $args['body'] ?? null;
         $bodyHash = null === $body
             ? null
             : hash('sha256', is_scalar($body) ? (string) $body : (string) wp_json_encode($body));
