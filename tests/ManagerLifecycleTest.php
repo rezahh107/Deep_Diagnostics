@@ -14,15 +14,19 @@ final class ManagerLifecycleTest extends TestCase {
         $manager = new Manager();
         $manager->boot();
 
+        self::assertArrayNotHasKey('muplugins_loaded', $GLOBALS['wddtf_test_actions']);
+        self::assertArrayNotHasKey('plugins_loaded', $GLOBALS['wddtf_test_actions']);
         self::assertArrayHasKey('after_setup_theme', $GLOBALS['wddtf_test_actions']);
-        $callback = $GLOBALS['wddtf_test_actions']['after_setup_theme'][0][0];
 
+        $callback = $GLOBALS['wddtf_test_actions']['after_setup_theme'][0][0];
         $callback();
 
-        $property = new ReflectionProperty($manager, 'events');
+        $property  = new ReflectionProperty($manager, 'events');
         $collector = $property->getValue($manager);
-        $events = $collector->snapshot();
+        $events    = $collector->snapshot();
 
-        self::assertSame('after_setup_theme', $events[0]['layer']);
+        self::assertSame('diagnostics_boot', $events[0]['layer']);
+        self::assertSame('plugins_loaded', $events[0]['data']['phase']);
+        self::assertSame('after_setup_theme', $events[1]['layer']);
     }
 }
