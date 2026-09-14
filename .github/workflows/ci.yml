@@ -92,6 +92,9 @@ jobs:
         working-directory: wordpress
         run: |
           set -euo pipefail
+          # Activation changes the active-plugin option after WordPress has already booted,
+          # so run one normal command with the plugin active and allow shutdown finalization.
+          wp eval 'echo "diagnostic request primed\n";'
           wp eval '
             $report = get_transient("wddtf_last_report");
             if (!is_array($report)) { fwrite(STDERR, "missing report\n"); exit(1); }
