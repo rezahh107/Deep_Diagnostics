@@ -18,8 +18,8 @@ final class AssetAnalyzer {
 
         global $wp_scripts, $wp_styles;
 
-        $heavy          = [];
-        $totalEnqueued  = 0;
+        $heavy           = [];
+        $totalEnqueued   = 0;
         $dependenciesMap = [
             'scripts' => $wp_scripts,
             'styles'  => $wp_styles,
@@ -44,26 +44,40 @@ final class AssetAnalyzer {
                     continue;
                 }
 
-                if ( wp_parse_url($item->src, PHP_URL_HOST) ) {
-                    continue;
+                $host       = wp_parse_url($item->src, PHP_URL_HOST);
+                $siteHost   = wp_parse_url(site_url(), PHP_URL_HOST);
+                $isExternal = $host && $host !== $siteHost;
+                $size       = null;
+
+                if ( ! $isExternal ) {
+                    $path = $this->localPath($item->src);
+                    if ( $path && file_exists($path) ) {
+                        $size = filesize($path);
+                    }
                 }
 
-                $path = $this->localPath($item->src);
-
-                if ( $path && file_exists($path) ) {
-                    $heavy[] = [
-                        'type'   => $type,
-                        'handle' => $handle,
-                        'src'    => $item->src,
-                        'size'   => filesize($path),
-                    ];
-                }
+                $heavy[] = [
+                    'type'     => $type,
+                    'handle'   => $handle,
+                    'src'      => $item->src,
+                    'size'     => $size,
+                    'external' => (bool) $isExternal,
+                ];
             }
         }
 
         usort(
             $heavy,
-            static fn(array $left, array $right): int => $right['size'] <=> $left['size']
+            static function(array $left, array $right): int {
+                if ( $left['external'] && ! $right['external'] ) {
+                    return -1;
+                }
+                if ( ! $left['external'] && $right['external'] ) {
+                    return 1;
+                }
+
+                return ($right['size'] ?? 0) <=> ($left['size'] ?? 0);
+            }
         );
 
         return [
@@ -75,8 +89,7 @@ final class AssetAnalyzer {
     private function localPath(string $src): ?string {
         $contentUrl = content_url();
         $contentDir = WP_CONTENT_DIR;
-
-        $src = strtok($src, '?#');
+        $src        = strtok($src, '?#');
 
         if ( 0 === strpos($src, $contentUrl) ) {
             return $contentDir . substr($src, strlen($contentUrl));
