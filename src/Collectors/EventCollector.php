@@ -17,27 +17,25 @@ final class EventCollector {
         $now = microtime(true);
 
         $this->hookCounts[$hook] = ($this->hookCounts[$hook] ?? 0) + 1;
-
-        if ( $this->lastTime > 0 ) {
-            $elapsed = $now - $this->lastTime;
-            $index   = count($this->events) - 1;
-
-            if ( $index >= 0 ) {
-                $this->events[$index]['data']['elapsed_since_prev'] = $elapsed;
-            }
-        }
+        $elapsed = $this->lastTime > 0 ? $now - $this->lastTime : null;
 
         if ( count($this->events) >= self::MAX ) {
             array_shift($this->events);
         }
 
+        $data = [
+            'did_action' => $this->hookCounts[$hook],
+            'memory'     => memory_get_usage(true),
+            'time'       => $now,
+        ];
+
+        if ( null !== $elapsed ) {
+            $data['elapsed_since_prev'] = $elapsed;
+        }
+
         $this->events[] = [
             'layer' => $hook,
-            'data'  => [
-                'did_action' => $this->hookCounts[$hook],
-                'memory'     => memory_get_usage(true),
-                'time'       => $now,
-            ],
+            'data'  => $data,
         ];
 
         $this->lastTime = $now;

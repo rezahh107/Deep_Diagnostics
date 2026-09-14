@@ -1,39 +1,16 @@
-```php
-# WordPress specific
-wp-content/plugins/wp-deep-diagnostics/build/
-wp-content/plugins/wp-deep-diagnostics/dist/
-wp-content/plugins/wp-deep-diagnostics/vendor/
+/vendor/
+/build/
+/dist/
+/.phpunit.cache/
+.phpunit.result.cache
 
-# PHP related
 *.log
+error_log
 *.tmp
 *.swp
-.svn/
-.DS_Store
-Thumbs.db
 
-# Dependencies
-vendor/
-composer.lock
-
-# IDE
 .vscode/
 .idea/
-*.sublime-project
-*.sublime-workspace
-
-# OS generated
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# Logs
-*.log
-error_log
-```
-
-Wait, let me reconsider this. The changes are only to PHP source files in a WordPress plugin. There are no build artifacts, dependency directories, or temporary files in the change list. Following rule #6, since the changes contain only source files (.php) and no build artifacts, dependencies, or temp files, the output should be empty.
-
-```php
-
-```

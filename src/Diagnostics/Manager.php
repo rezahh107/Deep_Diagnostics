@@ -9,6 +9,7 @@ use WDDTF\Collectors\HttpCollector;
 use WDDTF\Collectors\QueryCollector;
 use WDDTF\Collectors\SystemInspector;
 use WDDTF\Logging\File_Logger;
+use WDDTF\Privacy\Redactor;
 use WDDTF\Support\Env;
 
 if ( ! defined('ABSPATH') ) {
@@ -46,7 +47,13 @@ final class Manager {
         ];
 
         foreach ( $hooks as $hook ) {
-            add_action($hook, [$this->events, 'record'], 1);
+            add_action(
+                $hook,
+                function() use ($hook): void {
+                    $this->events->record($hook);
+                },
+                1
+            );
         }
 
         add_filter(
@@ -86,6 +93,9 @@ final class Manager {
             return;
         }
 
+        // These contexts need explicit session/correlation semantics before reports can be
+        // finalized truthfully. Keep them observable as a documented gap rather than
+        // pretending normal-request reports cover them.
         if (
             wp_doing_ajax() ||
             ( defined('REST_REQUEST') && REST_REQUEST ) ||
@@ -137,6 +147,11 @@ final class Manager {
             'assets'        => $assetData,
             'system'        => $system,
         ];
+
+        // This is the single persisted/reporting privacy boundary. Collectors may retain
+        // short-lived raw diagnostic context in memory; nothing crosses into reports,
+        // transients, Markdown or the LLM bundle until it has been minimized here.
+        $snapshot = ( new Redactor() )->redact($snapshot);
 
         $analyzer = new DiagnosticsAnalyzer();
         $report   = $analyzer->analyze($snapshot);

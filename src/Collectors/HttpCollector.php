@@ -54,17 +54,25 @@ final class HttpCollector {
     }
 
     private function fingerprint(string $url, array $args): string {
+        $headers = isset($args['headers']) ? array_map('strtolower', array_keys((array) $args['headers'])) : [];
+        sort($headers, SORT_STRING);
+
+        $body = $args['body'] ?? null;
+        $bodyHash = null === $body
+            ? null
+            : hash('sha256', is_scalar($body) ? (string) $body : (string) wp_json_encode($body));
+
         $data = [
-            'url'      => $url,
-            'method'   => $args['method'] ?? 'GET',
-            'blocking' => $args['blocking'] ?? true,
-            'timeout'  => $args['timeout'] ?? 5,
-            'headers'  => isset($args['headers']) ? (array) $args['headers'] : [],
-            'body'     => $args['body'] ?? null,
+            'url'         => $url,
+            'method'      => $args['method'] ?? 'GET',
+            'blocking'    => $args['blocking'] ?? true,
+            'timeout'     => $args['timeout'] ?? 5,
+            'headers'     => $headers,
+            'body_hash'   => $bodyHash,
             'httpversion' => $args['httpversion'] ?? '1.0',
         ];
 
-        return md5((string) wp_json_encode($data, \JSON_UNESCAPED_SLASHES | \JSON_SORT_KEYS));
+        return md5((string) wp_json_encode($data, \JSON_UNESCAPED_SLASHES));
     }
 
     public function snapshot(): array {
