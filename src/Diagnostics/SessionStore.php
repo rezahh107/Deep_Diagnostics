@@ -58,17 +58,11 @@ final class SessionStore {
         }
 
         $session = get_transient($this->key($id));
-        if ( false === $session ) {
-            return null;
-        }
-
-        if ( ! $this->isValidSession($session, $id) ) {
-            $this->delete($id);
+        if ( false === $session || ! $this->isValidSession($session, $id) ) {
             return null;
         }
 
         if ( (int) $session['expires_at'] <= ($this->clock)() ) {
-            $this->delete($id);
             return null;
         }
 
