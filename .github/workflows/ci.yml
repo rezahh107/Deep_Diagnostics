@@ -33,6 +33,8 @@ jobs:
         run: vendor/bin/phpunit tests/PrivacyBoundaryTest.php
       - name: Focused Cron diagnostics regression
         run: vendor/bin/phpunit tests/SessionStoreTest.php tests/CronDiagnosticsTest.php tests/CronReportTest.php tests/AdminCronActionTest.php
+      - name: Focused Gravity diagnostics regression
+        run: vendor/bin/phpunit tests/GravityDiagnosticsTest.php tests/GravityReportTest.php tests/AdminGravityActionTest.php
       - name: PHPUnit
         run: composer test
       - name: Deterministic package
@@ -106,12 +108,34 @@ jobs:
             if (!isset($report["layers"]["cron"]) || !isset($report["llm_bundle"]["cron"])) {
                 fwrite(STDERR, "missing additive cron report section\n"); exit(1);
             }
+            if (!isset($report["layers"]["gravity"]) || !isset($report["llm_bundle"]["gravity"])) {
+                fwrite(STDERR, "missing additive gravity report section\n"); exit(1);
+            }
             $json = get_transient("wddtf_last_report_json");
             $md = get_transient("wddtf_last_report_md");
             if (!is_string($json) || !is_file($json) || !is_string($md) || !is_file($md)) {
                 fwrite(STDERR, "report files missing\n"); exit(1);
             }
             echo "diagnostic lifecycle ok\n";
+          '
+      - name: Verify absent Gravity Flow fails closed
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $manager = new \WDDTF\Diagnostics\Manager();
+            $gravity = $manager->getGravityDiagnostics();
+            if (!empty($gravity["hosts"]["gravity_flow"]["available"])) {
+                fwrite(STDERR, "unexpected Gravity Flow runtime\n"); exit(1);
+            }
+            $result = $manager->startGravityFlowInboxObservation();
+            if (!empty($result["started"]) || "gravity_flow_unavailable" !== ($result["reason"] ?? "")) {
+                fwrite(STDERR, "absent Gravity Flow did not fail closed\n"); exit(1);
+            }
+            if (false !== get_transient("wddtf_gravityflow_inbox_observation_current")) {
+                fwrite(STDERR, "absent Gravity Flow created observation state\n"); exit(1);
+            }
+            echo "absent Gravity Flow boundary ok\n";
           '
       - name: Verify passive admin render is side-effect-free
         working-directory: wordpress
@@ -120,6 +144,7 @@ jobs:
           wp eval '
             $hook = \WDDTF\Cron\CronDiagnostics::PROBE_HOOK;
             set_transient("wddtf_cron_qualification_current", "malformed-session-pointer", HOUR_IN_SECONDS);
+            set_transient("wddtf_gravityflow_inbox_observation_current", "malformed-gravity-pointer", HOUR_IN_SECONDS);
             if (false !== wp_get_scheduled_event($hook)) {
                 fwrite(STDERR, "unexpected pre-existing probe\n"); exit(1);
             }
@@ -130,10 +155,13 @@ jobs:
                 fwrite(STDERR, "admin render scheduled a probe\n"); exit(1);
             }
             if ("malformed-session-pointer" !== get_transient("wddtf_cron_qualification_current")) {
-                fwrite(STDERR, "admin render mutated stale diagnostic state\n"); exit(1);
+                fwrite(STDERR, "admin render mutated stale Cron state\n"); exit(1);
             }
-            if (false === strpos($html, "WP-Cron Diagnostics")) {
-                fwrite(STDERR, "cron admin section missing\n"); exit(1);
+            if ("malformed-gravity-pointer" !== get_transient("wddtf_gravityflow_inbox_observation_current")) {
+                fwrite(STDERR, "admin render mutated stale Gravity state\n"); exit(1);
+            }
+            if (false === strpos($html, "WP-Cron Diagnostics") || false === strpos($html, "Gravity Forms / Gravity Flow Diagnostics")) {
+                fwrite(STDERR, "diagnostics admin sections missing\n"); exit(1);
             }
             echo "passive admin render ok\n";
           ' --user=admin
@@ -142,6 +170,7 @@ jobs:
         run: |
           set -euo pipefail
           wp eval '
+            delete_transient("wddtf_cron_qualification_current");
             $manager = new \WDDTF\Diagnostics\Manager();
             $result = $manager->startCronQualification();
             if (empty($result["started"]) || "scheduled" !== ($result["reason"] ?? "")) {
@@ -233,7 +262,7 @@ jobs:
             }
             echo "stale state recovery ok\n";
           '
-      - name: Verify explicit admin POST boundary
+      - name: Verify explicit Cron admin POST boundary
         working-directory: wordpress
         run: |
           set -euo pipefail
@@ -294,3 +323,185 @@ jobs:
             }
             echo "explicit admin POST boundary ok\n";
           ' --user=admin
+      - name: Install CI-only Gravity host fixture
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          mkdir -p wp-content/plugins/wddtf-gravity-fixture
+          cat > wp-content/plugins/wddtf-gravity-fixture/wddtf-gravity-fixture.php <<'PHP'
+          <?php
+          /**
+           * Plugin Name: WDDTF Gravity Host Fixture
+           */
+          if (!class_exists('GFForms')) {
+              final class GFForms {
+                  public static string $version = '3.1.1.1';
+              }
+          }
+          if (!defined('GRAVITY_FLOW_VERSION')) {
+              define('GRAVITY_FLOW_VERSION', '3.1.0');
+          }
+          function wddtf_gravity_fixture_inbox_ajax(): void {
+              apply_filters(
+                  'gravityflow_columns_inbox_table',
+                  ['entry' => 'Entry'],
+                  [
+                      'entry' => 'SecretInboxCanary123456789012345',
+                      'form_id' => 91,
+                      'entry_id' => 812,
+                  ]
+              );
+              wp_send_json_success(['ok' => true]);
+          }
+          add_action('wp_ajax_wddtf_fixture_inbox', 'wddtf_gravity_fixture_inbox_ajax');
+          add_action('wp_ajax_nopriv_wddtf_fixture_inbox', 'wddtf_gravity_fixture_inbox_ajax');
+          PHP
+          wp plugin activate wddtf-gravity-fixture
+      - name: Verify explicit Gravity Inbox POST boundary
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $id = get_transient("wddtf_gravityflow_inbox_observation_current");
+            if (is_string($id) && preg_match("/^ds-[a-f0-9]{16}$/", $id)) {
+                delete_transient("wddtf_diag_session_" . substr(hash("sha256", $id), 0, 32));
+            }
+            delete_transient("wddtf_gravityflow_inbox_observation_current");
+          '
+          wp eval '
+            add_filter(
+                "wp_die_handler",
+                static fn(): callable => static function(mixed $message): void {
+                    throw new RuntimeException((string) $message);
+                },
+                PHP_INT_MAX
+            );
+            $_SERVER["REQUEST_METHOD"] = "GET";
+            $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_start_gravityflow_inbox_observation");
+            $rejected = false;
+            try {
+                (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->startGravityFlowInboxObservation();
+            } catch (RuntimeException $exception) {
+                $rejected = true;
+            }
+            if (!$rejected) {
+                fwrite(STDERR, "Gravity GET request was not rejected\n"); exit(1);
+            }
+            if (false !== get_transient("wddtf_gravityflow_inbox_observation_current")) {
+                fwrite(STDERR, "Gravity GET request created observation state\n"); exit(1);
+            }
+            echo "Gravity admin GET rejection boundary ok\n";
+          ' --user=admin
+          wp eval '
+            add_filter(
+                "wp_redirect",
+                static function(string $location): string {
+                    throw new RuntimeException("redirect intercepted");
+                },
+                PHP_INT_MIN
+            );
+            $_SERVER["REQUEST_METHOD"] = "POST";
+            $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_start_gravityflow_inbox_observation");
+            $redirected = false;
+            try {
+                (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->startGravityFlowInboxObservation();
+            } catch (RuntimeException $exception) {
+                $redirected = "redirect intercepted" === $exception->getMessage();
+            }
+            if (!$redirected) {
+                fwrite(STDERR, "Gravity POST action did not reach redirect boundary\n"); exit(1);
+            }
+            $gravity = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics();
+            $observation = $gravity["inbox_observation"] ?? [];
+            if ("observing" !== ($observation["status"] ?? "")) {
+                fwrite(STDERR, "Gravity POST did not create observation session\n"); exit(1);
+            }
+            if ("3.1.1.1" !== ($gravity["hosts"]["gravity_forms"]["version"] ?? null) || "3.1.0" !== ($gravity["hosts"]["gravity_flow"]["version"] ?? null)) {
+                fwrite(STDERR, "fixture host versions not observed\n"); exit(1);
+            }
+            ob_start();
+            (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->render();
+            $html = ob_get_clean();
+            if (false !== strpos($html, "id=\"submit\" class=\"button\" value=\"Start Inbox Observation\" disabled=\"\"")) {
+                fwrite(STDERR, "available Gravity Flow action rendered disabled\n"); exit(1);
+            }
+            echo "explicit Gravity Inbox POST boundary ok\n";
+          ' --user=admin
+      - name: Exercise cross-request AJAX Inbox observation
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          php -S 127.0.0.1:8080 >/tmp/wddtf-gravity-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS -H 'Host: example.test' -X POST 'http://127.0.0.1:8080/wp-admin/admin-ajax.php' --data 'action=wddtf_fixture_inbox' >/tmp/wddtf-gravity-ajax.json; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat /tmp/wddtf-gravity-server.log >&2 || true
+            exit 1
+          fi
+          grep -q '"success":true' /tmp/wddtf-gravity-ajax.json
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          trap - EXIT
+          wp eval '
+            $gravity = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics();
+            $observation = $gravity["inbox_observation"] ?? [];
+            if ("observing" !== ($observation["status"] ?? "")) {
+                fwrite(STDERR, "observation session not active after AJAX sample\n"); exit(1);
+            }
+            if (1 !== ($observation["sample_count_total"] ?? 0) || 1 !== ($observation["ajax_sample_count"] ?? 0)) {
+                fwrite(STDERR, "AJAX Inbox sample not correlated\n"); exit(1);
+            }
+            $sample = $observation["samples"][0] ?? [];
+            if ("ajax" !== ($sample["transport"] ?? "") || "gravityflow_columns_inbox_table" !== ($sample["observer_hook"] ?? "")) {
+                fwrite(STDERR, "AJAX sample context incorrect\n"); exit(1);
+            }
+            if (!isset($sample["elapsed_ms"]) || (float) $sample["elapsed_ms"] < 0 || empty($sample["memory_peak_bytes"])) {
+                fwrite(STDERR, "AJAX sample timing metadata missing\n"); exit(1);
+            }
+            $encoded = (string) wp_json_encode($gravity);
+            foreach (["SecretInboxCanary123456789012345", "\"form_id\"", "\"entry_id\""] as $forbidden) {
+                if (false !== strpos($encoded, $forbidden)) {
+                    fwrite(STDERR, "sensitive fixture value leaked: $forbidden\n"); exit(1);
+                }
+            }
+            if (!empty($observation["evidence"]["raw_form_entry_values_stored"])) {
+                fwrite(STDERR, "privacy evidence incorrect\n"); exit(1);
+            }
+            echo "cross-request AJAX Inbox sample ok\n";
+          '
+      - name: Integrate Gravity observation into normal report
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval 'echo "gravity report primed\n";'
+          wp eval '
+            $report = get_transient("wddtf_last_report");
+            $gravity = $report["layers"]["gravity"] ?? null;
+            $llmGravity = $report["llm_bundle"]["gravity"] ?? null;
+            if (!is_array($gravity) || !is_array($llmGravity)) {
+                fwrite(STDERR, "persisted Gravity evidence missing\n"); exit(1);
+            }
+            if (1 !== ($gravity["inbox_observation"]["ajax_sample_count"] ?? 0)) {
+                fwrite(STDERR, "persisted AJAX Inbox evidence missing\n"); exit(1);
+            }
+            if (($gravity["inbox_observation"]["session_id"] ?? null) !== ($llmGravity["inbox_observation"]["session_id"] ?? null)) {
+                fwrite(STDERR, "Gravity session correlation mismatch\n"); exit(1);
+            }
+            $encoded = (string) wp_json_encode($report);
+            if (false !== strpos($encoded, "SecretInboxCanary123456789012345")) {
+                fwrite(STDERR, "fixture canary leaked into report\n"); exit(1);
+            }
+            $md = get_transient("wddtf_last_report_md");
+            if (!is_string($md) || !is_file($md) || false === strpos((string) file_get_contents($md), "Gravity Forms / Gravity Flow Diagnostics")) {
+                fwrite(STDERR, "Gravity markdown section missing\n"); exit(1);
+            }
+            echo "persisted Gravity report contract ok\n";
+          '
