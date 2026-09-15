@@ -15,7 +15,7 @@ final class SessionStore {
     private const KEY_PREFIX = 'wddtf_diag_session_';
     private const LOCK_PREFIX = 'wddtf_diag_lock_';
     private const INTEGRITY_PREFIX = 'wddtf_diag_integrity_';
-    private const LOCK_TTL = 5;
+    private const LOCK_TTL = 30;
     private const LOCK_ATTEMPTS = 8;
     private const LOCK_RETRY_US = 25000;
     private const INTEGRITY_TTL = 900;
@@ -138,6 +138,9 @@ final class SessionStore {
                 $next = $mutation($session);
                 if ( ! is_array($next) || ! $this->isValidSession($next, $id) ) {
                     $failureReason = 'mutation_callback_invalid';
+                } elseif ( ! $this->ownsActiveLock($id, $owner) ) {
+                    // Never commit after the lease expired or ownership moved to another writer.
+                    $failureReason = 'mutation_lock_lost';
                 } elseif ( ! $this->save($next) ) {
                     $failureReason = 'mutation_persistence_failed';
                 } else {
@@ -149,7 +152,7 @@ final class SessionStore {
         }
 
         $released = $this->releaseLock($id, $owner);
-        if ( ! $released ) {
+        if ( ! $released && null === $failureReason ) {
             $committed = false;
             $failureReason = 'mutation_lock_release_failed';
         }
@@ -254,6 +257,19 @@ final class SessionStore {
         }
 
         return null;
+    }
+
+    private function ownsActiveLock(string $id, string $owner): bool {
+        if ( ! function_exists('get_option') ) {
+            return false;
+        }
+
+        $observed = get_option($this->lockKey($id), false);
+        return is_array($observed)
+            && is_string($observed['owner'] ?? null)
+            && hash_equals($owner, $observed['owner'])
+            && is_int($observed['expires_at'] ?? null)
+            && $observed['expires_at'] > ($this->clock)();
     }
 
     private function releaseLock(string $id, string $owner): bool {
