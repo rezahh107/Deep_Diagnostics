@@ -23,25 +23,20 @@
         });
     }
 
+    function performanceNow() {
+        return window.performance && typeof window.performance.now === 'function'
+            ? window.performance.now()
+            : null;
+    }
+
     function visibilityState() {
         var state = document.visibilityState;
         return state === 'visible' || state === 'hidden' || state === 'prerender' ? state : 'unknown';
     }
 
-    function stateFor(xhr) {
-        if (requests && requests.has(xhr)) {
-            return requests.get(xhr);
-        }
-        return {
-            startedAt: window.performance && typeof window.performance.now === 'function' ? window.performance.now() : null,
-            mutationSequence: mutationSequence,
-            title: document.title
-        };
-    }
-
-    function classifyUiSignal(before) {
-        var titleChanged = before.title !== document.title;
-        var domMutation = mutationSequence > before.mutationSequence;
+    function classifyUiSignal(responseBaseline) {
+        var titleChanged = responseBaseline.title !== document.title;
+        var domMutation = mutationSequence > responseBaseline.mutationSequence;
         if (titleChanged && domMutation) {
             return 'both';
         }
@@ -59,9 +54,7 @@
             return;
         }
         requests.set(xhr, {
-            startedAt: window.performance && typeof window.performance.now === 'function' ? window.performance.now() : null,
-            mutationSequence: mutationSequence,
-            title: document.title
+            startedAt: performanceNow()
         });
     });
 
@@ -77,9 +70,16 @@
             return;
         }
 
-        var before = stateFor(xhr);
-        var finishedAt = window.performance && typeof window.performance.now === 'function' ? window.performance.now() : null;
-        var duration = before.startedAt !== null && finishedAt !== null ? Math.max(0, finishedAt - before.startedAt) : null;
+        var requestState = requests && requests.has(xhr) ? requests.get(xhr) : null;
+        var finishedAt = performanceNow();
+        var duration = requestState && requestState.startedAt !== null && finishedAt !== null
+            ? Math.max(0, finishedAt - requestState.startedAt)
+            : null;
+        var clientReceivedMs = Date.now();
+        var responseBaseline = {
+            mutationSequence: mutationSequence,
+            title: document.title
+        };
         var status = typeof xhr.status === 'number' ? xhr.status : 0;
         var outcome = status >= 200 && status < 400 ? 'success' : 'error';
 
@@ -90,9 +90,9 @@
                 sample_ref: sampleRef,
                 outcome: outcome,
                 http_status: status,
-                client_received_ms: Date.now(),
+                client_received_ms: clientReceivedMs,
                 visibility: visibilityState(),
-                ui_signal: classifyUiSignal(before)
+                ui_signal: classifyUiSignal(responseBaseline)
             };
             if (duration !== null && isFinite(duration)) {
                 payload.duration_ms = Math.round(duration * 100) / 100;
