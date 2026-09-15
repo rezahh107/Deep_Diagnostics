@@ -135,6 +135,66 @@ final class SessionStoreTest extends TestCase {
         );
     }
 
+    public function test_serialized_mutation_preserves_overlapping_event_and_sample_updates_and_counters(): void {
+        $store = $this->makeStore('ds-7777777777777777', 'lk-777777777777777777777777');
+        $initial = [
+            'events' => [],
+            'event_count_total' => 0,
+            'samples' => [],
+            'sample_count_total' => 0,
+        ];
+        $session = $store->create('gravityflow_inbox_observation', $initial, 900);
+        self::assertNotNull($session);
+
+        // The old unlocked pattern loses the event update when a stale sample writer saves last.
+        $eventWriter = $store->load($session['id']);
+        $sampleWriter = $store->load($session['id']);
+        self::assertNotNull($eventWriter);
+        self::assertNotNull($sampleWriter);
+        $eventWriter['data']['events'][] = 'event-a';
+        ++$eventWriter['data']['event_count_total'];
+        $sampleWriter['data']['samples'][] = 'sample-b';
+        ++$sampleWriter['data']['sample_count_total'];
+        self::assertTrue($store->save($eventWriter));
+        self::assertTrue($store->save($sampleWriter));
+        $lostUpdate = $store->load($session['id'])['data'];
+        self::assertSame([], $lostUpdate['events']);
+        self::assertSame(0, $lostUpdate['event_count_total']);
+        self::assertSame(['sample-b'], $lostUpdate['samples']);
+        self::assertSame(1, $lostUpdate['sample_count_total']);
+
+        $store->delete($session['id']);
+        $session = $store->create('gravityflow_inbox_observation', $initial, 900);
+        self::assertNotNull($session);
+
+        self::assertTrue(
+            $store->mutate(
+                $session['id'],
+                static function(array $locked): array {
+                    $locked['data']['events'][] = 'event-a';
+                    ++$locked['data']['event_count_total'];
+                    return $locked;
+                }
+            )
+        );
+        self::assertTrue(
+            $store->mutate(
+                $session['id'],
+                static function(array $locked): array {
+                    $locked['data']['samples'][] = 'sample-b';
+                    ++$locked['data']['sample_count_total'];
+                    return $locked;
+                }
+            )
+        );
+
+        $serialized = $store->load($session['id'])['data'];
+        self::assertSame(['event-a'], $serialized['events']);
+        self::assertSame(1, $serialized['event_count_total']);
+        self::assertSame(['sample-b'], $serialized['samples']);
+        self::assertSame(1, $serialized['sample_count_total']);
+    }
+
     public function test_lock_ownership_prevents_writer_from_releasing_replacement_lock(): void {
         $store = $this->makeStore('ds-3333333333333333', 'lk-333333333333333333333333');
         $session = $store->create('gravityflow_inbox_observation', ['count' => 0], 900);
