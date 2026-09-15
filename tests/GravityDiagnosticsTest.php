@@ -48,9 +48,16 @@ final class GravityDiagnosticsTest extends TestCase {
         $GLOBALS['wddtf_test_filters'] = [];
         $GLOBALS['wddtf_test_transients'] = [];
         $GLOBALS['wddtf_test_transient_failures'] = [];
+        $GLOBALS['wddtf_test_options'] = [];
         $GLOBALS['wddtf_test_is_ajax'] = false;
         $GLOBALS['wddtf_test_is_admin'] = false;
         $GLOBALS['wddtf_test_did_actions'] = [];
+        $GLOBALS['wddtf_test_auth_salt'] = 'test-only-server-held-auth-salt-0123456789abcdef';
+        $GLOBALS['wpdb'] = new wpdb();
+    }
+
+    protected function tearDown(): void {
+        unset($GLOBALS['wpdb']);
     }
 
     public function test_register_uses_documented_lifecycle_and_inbox_hooks(): void {
@@ -79,7 +86,6 @@ final class GravityDiagnosticsTest extends TestCase {
 
     public function test_start_is_bounded_and_duplicate_observation_is_not_created(): void {
         $diagnostics = $this->makeDiagnostics();
-
         $started = $diagnostics->startDiagnostic();
         $duplicate = $diagnostics->startInboxObservation();
 
@@ -91,6 +97,51 @@ final class GravityDiagnosticsTest extends TestCase {
         self::assertLessThanOrEqual(900, $started['observation']['remaining_seconds']);
         self::assertFalse($duplicate['started']);
         self::assertSame('already_observing', $duplicate['reason']);
+    }
+
+    public function test_secret_keyed_refs_are_stable_session_local_domain_separated_and_not_publicly_reproducible(): void {
+        $diagnostics = $this->makeDiagnostics('ds-bbbbbbbbbbbbbbbb');
+        $diagnostics->startDiagnostic();
+        $diagnostics->observeEntryCreated(['id' => 812, 'form_id' => 812], ['id' => 812]);
+        $first = $diagnostics->snapshot()['inbox_observation'];
+        $trace = $first['traces'][0];
+
+        $secondInstance = $this->makeDiagnostics('ds-bbbbbbbbbbbbbbbb');
+        $second = $secondInstance->snapshot()['inbox_observation'];
+        self::assertSame($trace['trace_ref'], $second['traces'][0]['trace_ref']);
+        self::assertSame($trace['form_ref'], $second['traces'][0]['form_ref']);
+        self::assertSame('ds-bbbbbbbbbbbbbbbb', $first['session_id']);
+
+        $oldPublicConstruction = 'gt-' . substr(
+            hash_hmac('sha256', 'entry:812', $first['session_id']),
+            0,
+            16
+        );
+        self::assertNotSame($oldPublicConstruction, $trace['trace_ref']);
+        self::assertNotSame(substr($trace['trace_ref'], 3), substr($trace['form_ref'], 3));
+
+        $GLOBALS['wddtf_test_transients'] = [];
+        $differentSession = $this->makeDiagnostics('ds-eeeeeeeeeeeeeeee');
+        $differentSession->startDiagnostic();
+        $differentSession->observeEntryCreated(['id' => 812, 'form_id' => 812], ['id' => 812]);
+        $different = $differentSession->snapshot()['inbox_observation']['traces'][0];
+
+        self::assertNotSame($trace['trace_ref'], $different['trace_ref']);
+        self::assertNotSame($trace['form_ref'], $different['form_ref']);
+    }
+
+    public function test_missing_server_secret_fails_closed_without_public_or_raw_id_fallback(): void {
+        $GLOBALS['wddtf_test_auth_salt'] = '';
+        $diagnostics = $this->makeDiagnostics();
+        $diagnostics->startDiagnostic();
+        $diagnostics->observeEntryCreated(['id' => 812, 'form_id' => 91], ['id' => 91]);
+
+        $observation = $diagnostics->snapshot()['inbox_observation'];
+        self::assertSame(0, $observation['trace_count']);
+        self::assertTrue($observation['integrity']['uncertain']);
+        self::assertSame('pseudonym_secret_unavailable', $observation['integrity']['reason']);
+        self::assertSame('INSUFFICIENT_EVIDENCE', $observation['analysis']['classification']);
+        self::assertStringNotContainsString('812', (string) wp_json_encode($observation));
     }
 
     public function test_entry_submission_step_assignee_and_inbox_correlate_without_raw_host_ids(): void {
@@ -136,6 +187,7 @@ final class GravityDiagnosticsTest extends TestCase {
         self::assertTrue($trace['analysis']['proven']['step_started']);
         self::assertTrue($trace['analysis']['proven']['positive_assignee_count']);
         self::assertTrue($trace['analysis']['proven']['ajax_inbox_linked']);
+        self::assertFalse($trace['analysis']['events_truncated']);
         self::assertSame(2, $assigneeEvent['assignee_count']);
         self::assertSame(['email' => 1, 'user_id' => 1], $assigneeEvent['assignee_types']);
         self::assertCount(2, $assigneeEvent['assignee_refs']);
@@ -263,6 +315,27 @@ final class GravityDiagnosticsTest extends TestCase {
         self::assertSame('inbox_observed_without_row_level_candidate_link', $trace['analysis']['reason']);
     }
 
+    public function test_integrity_uncertainty_from_unresolved_lock_blocks_normal_analysis(): void {
+        $diagnostics = $this->makeDiagnostics();
+        $started = $diagnostics->startDiagnostic();
+        $sessionId = $started['observation']['session_id'];
+        $lockKey = $this->lockKey($sessionId);
+        add_option(
+            $lockKey,
+            ['owner' => 'lk-aaaaaaaaaaaaaaaaaaaaaaaa', 'expires_at' => 2000],
+            '',
+            false
+        );
+
+        $diagnostics->observeEntryCreated(['id' => 812, 'form_id' => 91], ['id' => 91]);
+        $observation = $diagnostics->snapshot()['inbox_observation'];
+
+        self::assertTrue($observation['integrity']['uncertain']);
+        self::assertSame('mutation_lock_unavailable', $observation['integrity']['reason']);
+        self::assertSame('INSUFFICIENT_EVIDENCE', $observation['analysis']['classification']);
+        self::assertSame('session_integrity_uncertain', $observation['analysis']['reason']);
+    }
+
     public function test_passive_snapshot_does_not_create_or_repair_state(): void {
         set_transient('wddtf_gravityflow_inbox_observation_current', 'malformed-pointer', 900);
         $before = $GLOBALS['wddtf_test_transients'];
@@ -296,7 +369,7 @@ final class GravityDiagnosticsTest extends TestCase {
         self::assertSame($pointerBefore, get_transient('wddtf_gravityflow_inbox_observation_current'));
     }
 
-    public function test_trace_and_event_retention_are_bounded(): void {
+    public function test_trace_and_event_retention_are_bounded_and_truncated_absence_fails_closed(): void {
         $diagnostics = $this->makeDiagnostics();
         $diagnostics->startDiagnostic();
 
@@ -318,6 +391,73 @@ final class GravityDiagnosticsTest extends TestCase {
         self::assertSame(30, $trace['event_count_total']);
         self::assertCount(24, $trace['events']);
         self::assertTrue($trace['events_truncated']);
+        self::assertFalse($trace['analysis']['complete_history']);
+        self::assertSame('INSUFFICIENT_EVIDENCE', $trace['analysis']['classification']);
+        self::assertSame('trace_event_limit_reached', $trace['analysis']['reason']);
+        self::assertNotContains(
+            $trace['analysis']['classification'],
+            [
+                'ENTRY_NOT_OBSERVED',
+                'SUBMISSION_COMPLETE_NOT_OBSERVED',
+                'WORKFLOW_NOT_OBSERVED',
+                'STEP_NOT_OBSERVED',
+                'NO_ASSIGNEE_OBSERVED',
+                'INBOX_REFRESH_NOT_OBSERVED',
+            ]
+        );
+    }
+
+    public function test_truncation_does_not_erase_already_proven_server_to_inbox_chain(): void {
+        $diagnostics = $this->makeDiagnostics();
+        $diagnostics->startDiagnostic();
+        $entry = ['id' => 812, 'form_id' => 91];
+        $form = ['id' => 91];
+        $step = new WddtfFakeStep(301, 812, 91);
+
+        $diagnostics->observeEntryCreated($entry, $form);
+        $diagnostics->observeAfterSubmission($entry, $form);
+        $diagnostics->observeStepStart(301, 812, 91, 'pending', $step);
+        $diagnostics->observeStepAssignees([new WddtfFakeAssignee('user_id|77', '77')], $step);
+        $GLOBALS['wddtf_test_is_ajax'] = true;
+        $diagnostics->observeInboxRender([], []);
+        $diagnostics->observeInboxFieldValue('SecretInboxCanary123456789012345', 91, 5, $entry);
+        $diagnostics->persistObservedInboxRequest();
+        $GLOBALS['wddtf_test_is_ajax'] = false;
+
+        for ( $i = 0; $i < 25; ++$i ) {
+            $diagnostics->observeAfterSubmission($entry, $form);
+        }
+
+        $trace = $diagnostics->snapshot()['inbox_observation']['traces'][0];
+        self::assertTrue($trace['events_truncated']);
+        self::assertFalse($trace['analysis']['complete_history']);
+        self::assertSame('TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION', $trace['analysis']['classification']);
+        self::assertTrue($trace['analysis']['proven']['server_inbox_linked']);
+        self::assertTrue($trace['analysis']['unknowns']['trace_history_incomplete']);
+    }
+
+    public function test_two_request_instances_preserve_both_inbox_samples_and_counters(): void {
+        $now = 1000;
+        $store = new SessionStore(
+            static function() use (&$now): int { return $now; },
+            static fn(): string => 'ds-aaaaaaaaaaaaaaaa'
+        );
+        $starter = new GravityDiagnostics($store, static function() use (&$now): int { return $now; }, 999.0);
+        $starter->startDiagnostic();
+        $GLOBALS['wddtf_test_is_ajax'] = true;
+
+        $requestA = new GravityDiagnostics($store, static function() use (&$now): int { return $now; }, microtime(true));
+        $requestB = new GravityDiagnostics($store, static function() use (&$now): int { return $now; }, microtime(true));
+        $requestA->observeInboxRender([], []);
+        $requestB->observeInboxRender([], []);
+        $requestA->persistObservedInboxRequest();
+        ++$now;
+        $requestB->persistObservedInboxRequest();
+
+        $observation = (new GravityDiagnostics($store, static function() use (&$now): int { return $now; }))->snapshot()['inbox_observation'];
+        self::assertSame(2, $observation['sample_count_total']);
+        self::assertSame(2, $observation['ajax_sample_count']);
+        self::assertCount(2, $observation['samples']);
     }
 
     public function test_observation_stops_writing_after_twenty_inbox_samples(): void {
@@ -359,5 +499,9 @@ final class GravityDiagnosticsTest extends TestCase {
         $store = new SessionStore($clock, static fn(): string => $sessionId);
 
         return new GravityDiagnostics($store, $clock, microtime(true));
+    }
+
+    private function lockKey(string $sessionId): string {
+        return 'wddtf_diag_lock_' . substr(hash('sha256', $sessionId), 0, 32);
     }
 }
