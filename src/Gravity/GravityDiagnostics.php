@@ -234,11 +234,11 @@ final class GravityDiagnostics {
             'last_observed_at'        => null !== $lastObserved ? gmdate('c', $lastObserved) : null,
             'samples'                 => $samples,
             'evidence'                => [
-                'observer_hook'                 => self::INBOX_FILTER,
-                'inbox_render_observed'         => $total > 0,
-                'ajax_inbox_render_observed'    => $ajaxSamples > 0,
-                'request_duration_measured'     => $total > 0,
-                'raw_form_entry_values_stored'  => false,
+                'observer_hook'                => self::INBOX_FILTER,
+                'inbox_render_observed'        => $total > 0,
+                'ajax_inbox_render_observed'   => $ajaxSamples > 0,
+                'request_duration_measured'    => $total > 0,
+                'raw_form_entry_values_stored' => false,
             ],
             'unknowns'                => [
                 'client_round_trip_not_measured' => true,
@@ -253,8 +253,9 @@ final class GravityDiagnostics {
 
         $gravityFormsAvailable = class_exists('GFForms', false) || $gformHookCount > 0;
         $gravityFormsVersion = null;
-        if ( class_exists('GFForms', false) && property_exists('GFForms', 'version') ) {
-            $candidate = \GFForms::$version;
+        if ( class_exists('GFForms', false) ) {
+            $publicVariables = get_class_vars('GFForms');
+            $candidate = $publicVariables['version'] ?? null;
             $gravityFormsVersion = is_scalar($candidate) ? (string) $candidate : null;
         }
 
@@ -267,16 +268,16 @@ final class GravityDiagnostics {
 
         return [
             'gravity_forms' => [
-                'available'                => $gravityFormsAvailable,
-                'version'                  => $gravityFormsVersion,
-                'loaded_hook_observed'     => $gformHookCount > 0,
-                'loaded_hook_count'        => $gformHookCount,
+                'available'            => $gravityFormsAvailable,
+                'version'              => $gravityFormsVersion,
+                'loaded_hook_observed' => $gformHookCount > 0,
+                'loaded_hook_count'    => $gformHookCount,
             ],
             'gravity_flow'  => [
-                'available'                => $gravityFlowAvailable,
-                'version'                  => $gravityFlowVersion,
-                'loaded_hook_observed'     => $gravityFlowHookCount > 0,
-                'loaded_hook_count'        => $gravityFlowHookCount,
+                'available'            => $gravityFlowAvailable,
+                'version'              => $gravityFlowVersion,
+                'loaded_hook_observed' => $gravityFlowHookCount > 0,
+                'loaded_hook_count'    => $gravityFlowHookCount,
             ],
         ];
     }
