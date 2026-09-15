@@ -65,8 +65,28 @@ jobs:
       - name: Focused browser evidence contract
         run: vendor/bin/phpunit tests/GravityBrowserEvidenceTest.php tests/GravityBrowserTimingRepairTest.php
 
-      - name: Build generated plugin artifact
-        run: python3 create_fixed_plugin.py
+      - name: Exact-head privacy regression
+        run: vendor/bin/phpunit tests/PrivacyBoundaryTest.php
+
+      - name: Exact-head SessionStore and Cron regression
+        run: vendor/bin/phpunit tests/SessionStoreTest.php tests/CronDiagnosticsTest.php tests/CronReportTest.php tests/AdminCronActionTest.php
+
+      - name: Exact-head Gravity causal regression
+        run: vendor/bin/phpunit tests/GravityDiagnosticsTest.php tests/GravityReportTest.php tests/AdminGravityActionTest.php
+
+      - name: Exact-head full PHPUnit
+        run: composer test
+
+      - name: Build deterministic generated plugin artifact
+        run: |
+          set -euo pipefail
+          python3 create_fixed_plugin.py
+          first="$(sha256sum dist/wp-deep-diagnostics.zip | awk '{print $1}')"
+          rm -rf build dist
+          python3 create_fixed_plugin.py
+          second="$(sha256sum dist/wp-deep-diagnostics.zip | awk '{print $1}')"
+          test "$first" = "$second"
+          echo "Deterministic artifact SHA-256: $second"
 
       - name: Install WordPress and generated artifact
         env:
@@ -145,7 +165,6 @@ jobs:
           }
 
           function wddtf_browser_ci_refresh(): void {
-              // Keep the request in flight long enough to falsify ajaxSend-based UI baselines.
               usleep(300000);
               $entry = wddtf_browser_ci_entry();
               apply_filters(
@@ -464,6 +483,9 @@ jobs:
             if ("both" !== ($browser["ui_signal"] ?? "")) { fwrite(STDERR, "post-response UI metadata missing\n"); exit(1); }
             if (!is_numeric($browser["duration_ms"] ?? null) || $browser["duration_ms"] < 200 || $browser["duration_ms"] > 5000) { fwrite(STDERR, "positive control duration missing\n"); exit(1); }
             if (!empty($o["unknowns"]["client_round_trip_not_measured"])) { fwrite(STDERR, "positive control duration marked unknown\n"); exit(1); }
+            foreach (["request_body_stored", "response_body_stored", "dom_content_stored"] as $privacyFlag) {
+                if (!array_key_exists($privacyFlag, $browser) || false !== $browser[$privacyFlag]) { fwrite(STDERR, "privacy flag not false: $privacyFlag\n"); exit(1); }
+            }
             $encoded = (string) wp_json_encode($o);
             foreach ([
                 "SecretBrowserFieldCanary123456789012345",
@@ -480,8 +502,6 @@ jobs:
                 "\"entry_id\"",
                 "\"form_id\"",
                 "\"step_id\"",
-                "request_body",
-                "response_body",
                 "url_canary"
             ] as $forbidden) {
                 if (false !== strpos($encoded, $forbidden)) { fwrite(STDERR, "privacy leak in browser evidence: $forbidden\n"); exit(1); }
