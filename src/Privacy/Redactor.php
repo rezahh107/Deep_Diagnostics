@@ -69,7 +69,7 @@ final class Redactor {
         $parts = parse_url($value);
 
         if ( false === $parts ) {
-            return $this->redactText($value);
+            return self::REDACTED;
         }
 
         if ( str_starts_with($value, '/') ) {
