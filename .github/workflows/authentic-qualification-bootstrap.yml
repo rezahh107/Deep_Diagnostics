@@ -40,3 +40,5 @@ jobs:
           path: qualification-runtime
           if-no-files-found: error
           retention-days: 1
+
+# Temporary bridge refresh after authentic REST correlation repair.
