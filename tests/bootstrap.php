@@ -91,6 +91,8 @@ $GLOBALS['wddtf_test_did_actions'] = [];
 $GLOBALS['wddtf_test_auth_salt'] = 'test-only-server-held-auth-salt-0123456789abcdef';
 $GLOBALS['wddtf_test_logged_in'] = false;
 $GLOBALS['wddtf_test_capabilities'] = [];
+$GLOBALS['wddtf_test_validated_cookie_user'] = false;
+$GLOBALS['wddtf_test_user_capabilities'] = [];
 $GLOBALS['wddtf_test_enqueued_scripts'] = [];
 $GLOBALS['wddtf_test_inline_scripts'] = [];
 
@@ -122,6 +124,16 @@ function is_user_logged_in(): bool {
 
 function current_user_can(string $capability): bool {
     return true === ($GLOBALS['wddtf_test_capabilities'][$capability] ?? false);
+}
+
+function wp_validate_auth_cookie(string $cookie = '', string $scheme = ''): int|false {
+    $userId = $GLOBALS['wddtf_test_validated_cookie_user'] ?? false;
+    return is_int($userId) && $userId > 0 ? $userId : false;
+}
+
+function user_can(mixed $user, string $capability): bool {
+    $userId = is_int($user) ? $user : (is_object($user) && isset($user->ID) ? (int) $user->ID : 0);
+    return true === ($GLOBALS['wddtf_test_user_capabilities'][$userId][$capability] ?? false);
 }
 
 function __(string $text, string $domain = 'default'): string {

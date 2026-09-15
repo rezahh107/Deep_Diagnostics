@@ -43,6 +43,11 @@ final class GravityBrowserTimingRepairTest extends TestCase {
         self::assertStringContainsString('$.ajaxPrefilter(function (_options, _originalOptions, jqXHR)', $source);
         self::assertStringContainsString('jqXHR.always(function () {', $source);
         self::assertStringContainsString('observeCompletion(jqXHR);', $source);
+        self::assertStringContainsString("if (typeof window.fetch === 'function')", $source);
+        self::assertStringContainsString('var nativeFetch = window.fetch.bind(window);', $source);
+        self::assertStringContainsString('window.fetch = function () {', $source);
+        self::assertStringContainsString('response.headers.get(config.headerName)', $source);
+        self::assertStringContainsString('scheduleTaggedEvidence(', $source);
         self::assertStringNotContainsString('ajaxComplete.wddtfGravityBrowserEvidence', $source);
         self::assertSame(1, substr_count($source, 'Date.now()'));
 
@@ -52,29 +57,59 @@ final class GravityBrowserTimingRepairTest extends TestCase {
         self::assertIsInt($sendStart);
         self::assertLessThan($sendStart, $prefilter);
 
+        $scheduleStart = strpos($source, 'function scheduleTaggedEvidence(');
         $completionStart = strpos($source, 'function observeCompletion(xhr)');
+        self::assertIsInt($scheduleStart);
         self::assertIsInt($completionStart);
+        $scheduleBlock = substr($source, $scheduleStart, $completionStart - $scheduleStart);
         $completionBlock = substr($source, $completionStart, $prefilter - $completionStart);
         self::assertStringContainsString('xhr.getResponseHeader(config.headerName)', $completionBlock);
-        self::assertStringContainsString('var clientReceivedMs = Date.now();', $completionBlock);
-        self::assertStringContainsString('var responseBaseline = {', $completionBlock);
-        self::assertStringContainsString('window.setTimeout(function ()', $completionBlock);
+        self::assertStringContainsString('var clientReceivedMs = Date.now();', $scheduleBlock);
+        self::assertStringContainsString('var responseBaseline = {', $scheduleBlock);
+        self::assertStringContainsString('window.setTimeout(function ()', $scheduleBlock);
+
+        $fetchStart = strpos($source, "if (typeof window.fetch === 'function')");
+        self::assertIsInt($fetchStart);
+        $fetchBlock = substr($source, $fetchStart, $prefilter - $fetchStart);
+        self::assertStringContainsString('return nativeFetch.apply(window, arguments).then(function (response)', $fetchBlock);
+        self::assertStringContainsString('response.headers.get(config.headerName)', $fetchBlock);
+        self::assertStringContainsString('scheduleTaggedEvidence(', $fetchBlock);
+        self::assertStringNotContainsString('.url', $fetchBlock);
+        self::assertStringNotContainsString('response.text', $fetchBlock);
+        self::assertStringNotContainsString('response.json', $fetchBlock);
 
         $sendBlock = substr($source, $sendStart);
         self::assertStringNotContainsString('mutationSequence:', $sendBlock);
         self::assertStringNotContainsString('title:', $sendBlock);
         self::assertStringNotContainsString('getResponseHeader', $sendBlock);
 
-        $receipt = strpos($completionBlock, 'var clientReceivedMs = Date.now();');
-        $baseline = strpos($completionBlock, 'var responseBaseline = {');
-        $delay = strpos($completionBlock, 'window.setTimeout(function ()');
+        $receipt = strpos($scheduleBlock, 'var clientReceivedMs = Date.now();');
+        $baseline = strpos($scheduleBlock, 'var responseBaseline = {');
+        $delay = strpos($scheduleBlock, 'window.setTimeout(function ()');
         self::assertIsInt($receipt);
         self::assertIsInt($baseline);
         self::assertIsInt($delay);
         self::assertLessThan($baseline, $receipt);
         self::assertLessThan($delay, $baseline);
-        self::assertStringContainsString('client_received_ms: clientReceivedMs', $completionBlock);
-        self::assertStringContainsString('ui_signal: classifyUiSignal(responseBaseline)', $completionBlock);
+        self::assertStringContainsString('client_received_ms: clientReceivedMs', $scheduleBlock);
+        self::assertStringContainsString('ui_signal: classifyUiSignal(responseBaseline)', $scheduleBlock);
+    }
+
+    public function test_fetch_observer_admits_only_server_tagged_responses_without_content_or_url_inspection(): void {
+        $source = (string) file_get_contents(dirname(__DIR__) . '/assets/gravity-browser-observer.js');
+        $fetchStart = strpos($source, "if (typeof window.fetch === 'function')");
+        $prefilter = strpos($source, '$.ajaxPrefilter(function');
+
+        self::assertIsInt($fetchStart);
+        self::assertIsInt($prefilter);
+        $fetchBlock = substr($source, $fetchStart, $prefilter - $fetchStart);
+        self::assertStringContainsString('var nativeFetch = window.fetch.bind(window);', $fetchBlock);
+        self::assertStringContainsString('return nativeFetch.apply(window, arguments).then(function (response)', $fetchBlock);
+        self::assertStringContainsString('response.headers.get(config.headerName)', $fetchBlock);
+        self::assertStringContainsString('scheduleTaggedEvidence(', $fetchBlock);
+        self::assertStringNotContainsString('.url', $fetchBlock);
+        self::assertStringNotContainsString('response.text', $fetchBlock);
+        self::assertStringNotContainsString('response.json', $fetchBlock);
     }
 
     public function test_cron_truncation_markup_has_no_unmatched_wrapper_close(): void {

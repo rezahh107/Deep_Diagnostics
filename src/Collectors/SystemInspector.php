@@ -28,7 +28,10 @@ final class SystemInspector {
             $data['autoload_count'] = count($options);
 
             foreach ( $options as $value ) {
-                $data['autoload_size'] += strlen(maybe_serialize($value));
+                // wp_load_alloptions() returns maybe-unserialized values, so scalar
+                // options may be ints/bools. WordPress persists those scalars through
+                // string coercion; mirror that representation before measuring bytes.
+                $data['autoload_size'] += strlen((string) maybe_serialize($value));
             }
         }
 

@@ -453,7 +453,7 @@ final class GravityDiagnostics {
                     ) {
                         continue;
                     }
-                    if ( 'ajax' !== ($sample['transport'] ?? null) || empty($sample['candidate_trace_refs']) ) {
+                    if ( ! in_array($sample['transport'] ?? null, ['ajax', 'rest'], true) || empty($sample['candidate_trace_refs']) ) {
                         return $locked;
                     }
                     $matched = true;
@@ -926,7 +926,13 @@ final class GravityDiagnostics {
     }
 
     private function maybeTagBrowserResponse(): void {
-        if ( $this->browserHeaderEmitted || 'ajax' !== $this->requestTransport() || ! $this->browserEvidenceAuthorized() || [] === $this->inboxCandidateTraceRefs ) {
+        $transport = $this->requestTransport();
+        if (
+            $this->browserHeaderEmitted ||
+            ! in_array($transport, ['ajax', 'rest'], true) ||
+            ! $this->browserResponseTagAuthorized($transport) ||
+            [] === $this->inboxCandidateTraceRefs
+        ) {
             return;
         }
         if ( null === $this->browserSampleRef ) {
@@ -945,6 +951,22 @@ final class GravityDiagnostics {
             && function_exists('current_user_can')
             && is_user_logged_in()
             && current_user_can(self::BROWSER_CAPABILITY);
+    }
+
+    private function browserResponseTagAuthorized(string $transport): bool {
+        if ( $this->browserEvidenceAuthorized() ) {
+            return true;
+        }
+        if (
+            'rest' !== $transport ||
+            ! function_exists('wp_validate_auth_cookie') ||
+            ! function_exists('user_can')
+        ) {
+            return false;
+        }
+
+        $userId = wp_validate_auth_cookie('', 'logged_in');
+        return is_int($userId) && $userId > 0 && user_can($userId, self::BROWSER_CAPABILITY);
     }
 
     private function browserNonceAction(string $sessionId): string {

@@ -39,18 +39,22 @@ final class AssetAnalyzer {
                 }
 
                 $item = $dependencies->registered[$handle];
+                $src  = $item->src ?? null;
 
-                if ( empty($item->src) ) {
+                // WordPress dependencies may be registered as aliases or dependency-only
+                // handles without a URL-like source. Those still count as enqueued, but
+                // there is no asset path/host to inspect.
+                if ( ! is_string($src) || '' === trim($src) ) {
                     continue;
                 }
 
-                $host       = wp_parse_url($item->src, PHP_URL_HOST);
+                $host       = wp_parse_url($src, PHP_URL_HOST);
                 $siteHost   = wp_parse_url(site_url(), PHP_URL_HOST);
                 $isExternal = $host && $host !== $siteHost;
                 $size       = null;
 
                 if ( ! $isExternal ) {
-                    $path = $this->localPath($item->src);
+                    $path = $this->localPath($src);
                     if ( $path && file_exists($path) ) {
                         $size = filesize($path);
                     }
@@ -59,7 +63,7 @@ final class AssetAnalyzer {
                 $heavy[] = [
                     'type'     => $type,
                     'handle'   => $handle,
-                    'src'      => $item->src,
+                    'src'      => $src,
                     'size'     => $size,
                     'external' => (bool) $isExternal,
                 ];
