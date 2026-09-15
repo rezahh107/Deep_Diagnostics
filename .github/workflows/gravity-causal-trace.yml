@@ -1,0 +1,354 @@
+name: Gravity causal trace integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gravity-causal-trace:
+    name: Gravity causal trace / WordPress ${{ matrix.wordpress }} / PHP 8.1
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        wordpress: ['6.5', 'latest']
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: wordpress
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: wp-cli
+          coverage: none
+
+      - name: Build generated plugin artifact
+        run: python3 create_fixed_plugin.py
+
+      - name: Install WordPress and generated artifact
+        env:
+          WP_VERSION: ${{ matrix.wordpress }}
+        run: |
+          set -euo pipefail
+          mkdir wordpress
+          cd wordpress
+          if [ "$WP_VERSION" = latest ]; then
+            wp core download --quiet
+          else
+            wp core download --version="$WP_VERSION" --quiet
+          fi
+          wp config create --dbname=wordpress --dbuser=root --dbpass=root --dbhost=127.0.0.1:3306 --skip-check --quiet
+          wp core install --url=http://example.test --title='Deep Diagnostics causal trace CI' --admin_user=admin --admin_password='ci-password' --admin_email=admin@example.test --skip-email --quiet
+          unzip -q ../dist/wp-deep-diagnostics.zip -d wp-content/plugins
+          wp plugin activate wp-deep-diagnostics
+
+      - name: Install documented-hook Gravity lifecycle fixture
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          mkdir -p wp-content/plugins/wddtf-gravity-causal-fixture
+          cat > wp-content/plugins/wddtf-gravity-causal-fixture/wddtf-gravity-causal-fixture.php <<'PHP'
+          <?php
+          /**
+           * Plugin Name: WDDTF Gravity Causal Fixture
+           * Description: CI-only fixture for documented Gravity Forms / Gravity Flow hook contracts.
+           */
+          if (!class_exists('GFForms')) {
+              final class GFForms {
+                  public static string $version = '3.1.1.1';
+              }
+          }
+          if (!defined('GRAVITY_FLOW_VERSION')) {
+              define('GRAVITY_FLOW_VERSION', '3.1.0');
+          }
+
+          final class WDDTF_CI_Step {
+              public function __construct(
+                  private int $id,
+                  private int $entryId,
+                  private int $formId,
+                  private string $type,
+                  private string $status
+              ) {}
+              public function get_id(): int { return $this->id; }
+              public function get_entry_id(): int { return $this->entryId; }
+              public function get_form_id(): int { return $this->formId; }
+              public function get_type(): string { return $this->type; }
+              public function get_status(): string { return $this->status; }
+          }
+
+          final class WDDTF_CI_Assignee {
+              public function __construct(private string $key, private string $id) {}
+              public function get_key(): string { return $this->key; }
+              public function get_id(): string { return $this->id; }
+              public function get_status(): string { return 'pending'; }
+          }
+
+          function wddtf_ci_entry(): array {
+              return [
+                  'id' => 812,
+                  'form_id' => 91,
+                  '1' => 'SecretLifecycleCanary123456789012345',
+                  '2' => 'private-person@example.test',
+                  '3' => '+15551234567',
+              ];
+          }
+          function wddtf_ci_form(): array {
+              return ['id' => 91, 'title' => 'Private Fixture Form'];
+          }
+          function wddtf_ci_step_one(string $status = 'pending'): WDDTF_CI_Step {
+              return new WDDTF_CI_Step(301, 812, 91, 'approval', $status);
+          }
+          function wddtf_ci_step_two(string $status = 'pending'): WDDTF_CI_Step {
+              return new WDDTF_CI_Step(302, 812, 91, 'user_input', $status);
+          }
+
+          function wddtf_ci_submit(): void {
+              $entry = wddtf_ci_entry();
+              $form = wddtf_ci_form();
+              $step = wddtf_ci_step_one();
+              do_action('gform_entry_created', $entry, $form);
+              do_action('gform_after_submission', $entry, $form);
+              do_action('gravityflow_step_start', 301, 812, 91, 'pending', $step);
+              apply_filters(
+                  'gravityflow_step_assignees',
+                  [
+                      new WDDTF_CI_Assignee('user_id|77', '77'),
+                      new WDDTF_CI_Assignee('email|private-person@example.test', 'private-person@example.test'),
+                  ],
+                  $step
+              );
+              wp_send_json_success(['phase' => 'submit']);
+          }
+
+          function wddtf_ci_unrelated(): void {
+              wp_send_json_success(['canary' => 'UnrelatedAjaxCanary123456789012345']);
+          }
+
+          function wddtf_ci_progress(): void {
+              $form = wddtf_ci_form();
+              do_action('gravityflow_step_complete', 301, 812, 91, 'approved');
+              do_action('gravityflow_post_process_workflow', $form, 812, 301, 302);
+              $step = wddtf_ci_step_two();
+              do_action('gravityflow_step_start', 302, 812, 91, 'pending', $step);
+              apply_filters(
+                  'gravityflow_step_assignees',
+                  [new WDDTF_CI_Assignee('role|editor', 'editor')],
+                  $step
+              );
+              wp_send_json_success(['phase' => 'progress']);
+          }
+
+          function wddtf_ci_inbox(): void {
+              $entry = wddtf_ci_entry();
+              apply_filters(
+                  'gravityflow_columns_inbox_table',
+                  ['entry' => 'Entry'],
+                  ['entry' => 'SecretInboxArgsCanary123456789012345', 'entry_id' => 812, 'form_id' => 91]
+              );
+              apply_filters(
+                  'gravityflow_inbox_field_value',
+                  'SecretInboxFieldCanary123456789012345',
+                  91,
+                  5,
+                  $entry
+              );
+              wp_send_json_success(['phase' => 'inbox']);
+          }
+
+          function wddtf_ci_complete(): void {
+              $form = wddtf_ci_form();
+              do_action('gravityflow_step_complete', 302, 812, 91, 'complete');
+              do_action('gravityflow_workflow_complete', 812, $form, 'complete');
+              wp_send_json_success(['phase' => 'complete']);
+          }
+
+          foreach ([
+              'wddtf_ci_submit',
+              'wddtf_ci_unrelated',
+              'wddtf_ci_progress',
+              'wddtf_ci_inbox',
+              'wddtf_ci_complete',
+          ] as $action) {
+              add_action('wp_ajax_' . $action, $action);
+              add_action('wp_ajax_nopriv_' . $action, $action);
+          }
+          PHP
+          wp plugin activate wddtf-gravity-causal-fixture
+
+      - name: Start one bounded Gravity diagnostic
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            delete_transient("wddtf_gravityflow_inbox_observation_current");
+            $result = (new \WDDTF\Diagnostics\Manager())->startGravityDiagnostic();
+            if (empty($result["started"]) || "observing" !== ($result["reason"] ?? "")) {
+                fwrite(STDERR, "Gravity diagnostic did not start\n"); exit(1);
+            }
+            $o = $result["observation"];
+            if (10 !== ($o["trace_limit"] ?? null) || 24 !== ($o["trace_event_limit"] ?? null) || 20 !== ($o["sample_limit"] ?? null)) {
+                fwrite(STDERR, "bounded limits changed\n"); exit(1);
+            }
+            echo "Gravity diagnostic started: " . ($o["session_id"] ?? "missing") . "\n";
+          '
+
+      - name: Exercise cross-request causal lifecycle
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          php -S 127.0.0.1:8080 >/tmp/wddtf-causal-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          request() {
+            local action="$1"
+            local output="/tmp/${action}.json"
+            local ok=0
+            for attempt in $(seq 1 30); do
+              if curl -fsS -H 'Host: example.test' -X POST 'http://127.0.0.1:8080/wp-admin/admin-ajax.php' --data "action=${action}" >"$output"; then
+                ok=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$ok" -ne 1 ]; then
+              cat /tmp/wddtf-causal-server.log >&2 || true
+              exit 1
+            fi
+            grep -q '"success":true' "$output"
+          }
+
+          request wddtf_ci_submit
+          wp eval '
+            $o = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"];
+            if (1 !== ($o["trace_count"] ?? 0)) { fwrite(STDERR, "candidate trace missing after submission\n"); exit(1); }
+            $trace = $o["traces"][0] ?? [];
+            if ("INBOX_REFRESH_NOT_OBSERVED" !== ($trace["analysis"]["classification"] ?? "")) {
+                fwrite(STDERR, "pre-Inbox classification is not truthful\n"); exit(1);
+            }
+            $types = array_column($trace["events"] ?? [], "type");
+            if (["entry_created", "submission_completed", "step_started", "assignees_observed"] !== $types) {
+                fwrite(STDERR, "submission lifecycle ordering mismatch\n"); exit(1);
+            }
+            if (2 !== (($trace["events"][3]["assignee_count"] ?? 0))) {
+                fwrite(STDERR, "assignee evidence missing\n"); exit(1);
+            }
+            echo "submission trace correlated\n";
+          '
+
+          request wddtf_ci_unrelated
+          wp eval '
+            $o = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"];
+            $trace = $o["traces"][0] ?? [];
+            if (4 !== ($trace["event_count_total"] ?? 0) || 0 !== ($o["sample_count_total"] ?? 0)) {
+                fwrite(STDERR, "unrelated AJAX broadened diagnostic persistence\n"); exit(1);
+            }
+            echo "unrelated AJAX remained unobserved\n";
+          '
+
+          request wddtf_ci_progress
+          wp eval '
+            $trace = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"]["traces"][0] ?? [];
+            $events = $trace["events"] ?? [];
+            $types = array_column($events, "type");
+            $expected = ["entry_created", "submission_completed", "step_started", "assignees_observed", "step_completed", "workflow_processed", "step_started", "assignees_observed"];
+            if ($expected !== $types) { fwrite(STDERR, "step progression ordering mismatch\n"); exit(1); }
+            if (($events[5]["next_step_ref"] ?? null) !== ($events[6]["step_ref"] ?? null)) {
+                fwrite(STDERR, "next step correlation mismatch\n"); exit(1);
+            }
+            echo "step progression correlated\n";
+          '
+
+          request wddtf_ci_inbox
+          wp eval '
+            $o = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"];
+            $trace = $o["traces"][0] ?? [];
+            if (1 !== ($o["ajax_sample_count"] ?? 0)) { fwrite(STDERR, "AJAX Inbox sample missing\n"); exit(1); }
+            if ("TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION" !== ($trace["analysis"]["classification"] ?? "")) {
+                fwrite(STDERR, "Inbox row was not linked to trace\n"); exit(1);
+            }
+            if (($trace["trace_ref"] ?? null) !== ($o["samples"][0]["candidate_trace_refs"][0] ?? null)) {
+                fwrite(STDERR, "Inbox trace reference mismatch\n"); exit(1);
+            }
+            echo "Inbox AJAX correlated to causal trace\n";
+          '
+
+          request wddtf_ci_complete
+          wp eval '
+            $o = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"];
+            $trace = $o["traces"][0] ?? [];
+            $types = array_column($trace["events"] ?? [], "type");
+            if ("workflow_completed" !== end($types)) { fwrite(STDERR, "workflow completion evidence missing\n"); exit(1); }
+            if ("TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION" !== ($trace["analysis"]["classification"] ?? "")) {
+                fwrite(STDERR, "completed trace classification regressed\n"); exit(1);
+            }
+            $encoded = (string) wp_json_encode($o);
+            foreach ([
+                "SecretLifecycleCanary123456789012345",
+                "SecretInboxArgsCanary123456789012345",
+                "SecretInboxFieldCanary123456789012345",
+                "private-person@example.test",
+                "\"entry_id\"",
+                "\"form_id\"",
+                "\"step_id\""
+            ] as $forbidden) {
+                if (false !== strpos($encoded, $forbidden)) {
+                    fwrite(STDERR, "privacy leak in Gravity evidence: $forbidden\n"); exit(1);
+                }
+            }
+            echo "workflow completion and privacy boundary ok\n";
+          '
+
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          trap - EXIT
+
+      - name: Verify normal report and LLM contract
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval 'echo "normal request finalization\n";'
+          wp eval '
+            $report = get_transient("wddtf_last_report");
+            $gravity = $report["layers"]["gravity"] ?? null;
+            $llm = $report["llm_bundle"]["gravity"] ?? null;
+            if (!is_array($gravity) || !is_array($llm)) { fwrite(STDERR, "Gravity report contract missing\n"); exit(1); }
+            if (($gravity["inbox_observation"]["session_id"] ?? null) !== ($llm["inbox_observation"]["session_id"] ?? null)) {
+                fwrite(STDERR, "LLM correlation mismatch\n"); exit(1);
+            }
+            $trace = $gravity["inbox_observation"]["traces"][0] ?? [];
+            if ("TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION" !== ($trace["analysis"]["classification"] ?? "")) {
+                fwrite(STDERR, "report causal trace missing\n"); exit(1);
+            }
+            if (empty($report["layers"]["cron"])) { fwrite(STDERR, "Cron report regression\n"); exit(1); }
+            $encoded = (string) wp_json_encode($gravity);
+            foreach (["SecretLifecycleCanary123456789012345", "private-person@example.test", "\"entry_id\"", "\"form_id\""] as $forbidden) {
+                if (false !== strpos($encoded, $forbidden)) { fwrite(STDERR, "report privacy leak: $forbidden\n"); exit(1); }
+            }
+            $md = get_transient("wddtf_last_report_md");
+            if (!is_string($md) || !is_file($md)) { fwrite(STDERR, "Markdown path missing\n"); exit(1); }
+            $markdown = (string) file_get_contents($md);
+            if (false === strpos($markdown, "Gravity causal trace") || false === strpos($markdown, "TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION")) {
+                fwrite(STDERR, "Markdown causal trace missing\n"); exit(1);
+            }
+            if (false !== strpos($markdown, "SecretLifecycleCanary123456789012345") || false !== strpos($markdown, "private-person@example.test")) {
+                fwrite(STDERR, "Markdown privacy leak\n"); exit(1);
+            }
+            echo "normal report causal contract ok\n";
+          '

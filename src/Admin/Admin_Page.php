@@ -79,10 +79,10 @@ final class Admin_Page {
 
         $this->requirePost(
             self::GRAVITYFLOW_INBOX_ACTION,
-            __('Gravity Flow Inbox observation requires an explicit POST request.', 'wp-deep-diagnostics')
+            __('Gravity diagnostic collection requires an explicit POST request.', 'wp-deep-diagnostics')
         );
 
-        $result = $this->manager->startGravityFlowInboxObservation();
+        $result = $this->manager->startGravityDiagnostic();
         $reason = sanitize_key((string) ($result['reason'] ?? 'unknown'));
 
         wp_safe_redirect(

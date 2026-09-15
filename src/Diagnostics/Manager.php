@@ -111,8 +111,12 @@ final class Manager {
         return ( new Redactor() )->redact($this->cron->snapshot());
     }
 
+    public function startGravityDiagnostic(): array {
+        return $this->gravity->startDiagnostic();
+    }
+
     public function startGravityFlowInboxObservation(): array {
-        return $this->gravity->startInboxObservation();
+        return $this->startGravityDiagnostic();
     }
 
     public function getGravityDiagnostics(): array {
@@ -126,10 +130,9 @@ final class Manager {
             return;
         }
 
-        // AJAX and REST still do not finalize ordinary per-request reports. Gravity Flow
-        // Inbox observation uses its own bounded Diagnostic Session to persist only the
-        // minimal correlated sample for an observed Inbox render/refresh. Cron callbacks
-        // likewise persist only their bounded qualification evidence.
+        // AJAX and REST still do not finalize ordinary per-request reports. Gravity causal
+        // diagnostics persist only bounded host-hook evidence in their explicit Diagnostic
+        // Session, and Cron callbacks likewise persist only bounded qualification evidence.
         if (
             wp_doing_ajax() ||
             ( defined('REST_REQUEST') && REST_REQUEST ) ||

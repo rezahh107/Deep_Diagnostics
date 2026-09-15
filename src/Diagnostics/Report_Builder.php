@@ -20,6 +20,9 @@ final class Report_Builder {
         $gravityForms = $gravityHosts['gravity_forms'] ?? [];
         $gravityFlow = $gravityHosts['gravity_flow'] ?? [];
         $inboxObservation = $gravity['inbox_observation'] ?? [];
+        $traces = is_array($inboxObservation['traces'] ?? null) ? $inboxObservation['traces'] : [];
+        $gravityAnalysis = $inboxObservation['analysis'] ?? [];
+        $gravityIntegrity = $inboxObservation['integrity'] ?? [];
 
         $lines = [
             '# WP Deep Diagnostics Report',
@@ -56,18 +59,45 @@ final class Report_Builder {
         $lines[] = '- ' . __('Gravity Forms version', 'wp-deep-diagnostics') . ': ' . ($gravityForms['version'] ?? 'n/a');
         $lines[] = '- ' . __('Gravity Flow available', 'wp-deep-diagnostics') . ': ' . (! empty($gravityFlow['available']) ? 'yes' : 'no');
         $lines[] = '- ' . __('Gravity Flow version', 'wp-deep-diagnostics') . ': ' . ($gravityFlow['version'] ?? 'n/a');
-        $lines[] = '- ' . __('Inbox observation status', 'wp-deep-diagnostics') . ': ' . ($inboxObservation['status'] ?? 'not_started');
+        $lines[] = '- ' . __('Diagnostic session', 'wp-deep-diagnostics') . ': ' . ($inboxObservation['session_id'] ?? 'n/a');
+        $lines[] = '- ' . __('Diagnostic status', 'wp-deep-diagnostics') . ': ' . ($inboxObservation['status'] ?? 'not_started');
+        $lines[] = '- ' . __('Candidate traces', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['trace_count'] ?? 0);
+        $lines[] = '- ' . __('Session analysis', 'wp-deep-diagnostics') . ': ' . ($gravityAnalysis['classification'] ?? 'ENTRY_NOT_OBSERVED');
+        $lines[] = '- ' . __('Session integrity uncertainty', 'wp-deep-diagnostics') . ': ' . (! empty($gravityIntegrity['uncertain']) ? 'yes' : 'no');
+        $lines[] = '- ' . __('Session integrity reason', 'wp-deep-diagnostics') . ': ' . ($gravityIntegrity['reason'] ?? 'n/a');
         $lines[] = '- ' . __('Inbox samples observed', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['sample_count_total'] ?? 0);
         $lines[] = '- ' . __('AJAX Inbox samples observed', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['ajax_sample_count'] ?? 0);
-        $lines[] = '- ' . __('Inbox observation evidence', 'wp-deep-diagnostics') . ': ' . wp_json_encode($inboxObservation['evidence'] ?? []);
-        $lines[] = '- ' . __('Inbox observation unknowns', 'wp-deep-diagnostics') . ': ' . wp_json_encode($inboxObservation['unknowns'] ?? []);
+        $lines[] = '- ' . __('Gravity evidence', 'wp-deep-diagnostics') . ': ' . wp_json_encode($inboxObservation['evidence'] ?? []);
+        $lines[] = '- ' . __('Gravity unknowns', 'wp-deep-diagnostics') . ': ' . wp_json_encode($inboxObservation['unknowns'] ?? []);
         $lines[] = '';
 
-        foreach ( array_slice($inboxObservation['samples'] ?? [], 0, 20) as $sample ) {
-            $lines[] = '- ' . wp_json_encode(
-                $sample,
-                \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE
-            );
+        foreach ( array_slice($traces, 0, 10) as $trace ) {
+            $lines[] = '### ' . __('Gravity causal trace', 'wp-deep-diagnostics') . ' ' . ($trace['trace_ref'] ?? 'n/a');
+            $lines[] = '- ' . __('Form reference', 'wp-deep-diagnostics') . ': ' . ($trace['form_ref'] ?? 'n/a');
+            $lines[] = '- ' . __('First inconsistent point', 'wp-deep-diagnostics') . ': ' . ($trace['analysis']['classification'] ?? 'INSUFFICIENT_EVIDENCE');
+            $lines[] = '- ' . __('Analysis reason', 'wp-deep-diagnostics') . ': ' . ($trace['analysis']['reason'] ?? 'unknown');
+            $lines[] = '- ' . __('Complete retained history', 'wp-deep-diagnostics') . ': ' . (! empty($trace['analysis']['complete_history']) ? 'yes' : 'no');
+            $lines[] = '- ' . __('Events truncated', 'wp-deep-diagnostics') . ': ' . (! empty($trace['analysis']['events_truncated']) ? 'yes' : 'no');
+            $lines[] = '- ' . __('Proven facts', 'wp-deep-diagnostics') . ': ' . wp_json_encode($trace['analysis']['proven'] ?? []);
+            $lines[] = '- ' . __('Unresolved facts', 'wp-deep-diagnostics') . ': ' . wp_json_encode($trace['analysis']['unknowns'] ?? []);
+
+            foreach ( array_slice($trace['events'] ?? [], 0, 24) as $event ) {
+                $lines[] = '- ' . wp_json_encode(
+                    $event,
+                    \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE
+                );
+            }
+            $lines[] = '';
+        }
+
+        if ( ! empty($inboxObservation['samples']) ) {
+            $lines[] = '### ' . __('Observed Inbox request samples', 'wp-deep-diagnostics');
+            foreach ( array_slice($inboxObservation['samples'], 0, 20) as $sample ) {
+                $lines[] = '- ' . wp_json_encode(
+                    $sample,
+                    \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE
+                );
+            }
         }
 
         $lines[] = '';

@@ -14,6 +14,8 @@ $gravityFlowHost = $gravityHosts['gravity_flow'] ?? [];
 $inboxObservation = $gravity['inbox_observation'] ?? [];
 $inboxStatus = is_string($inboxObservation['status'] ?? null) ? $inboxObservation['status'] : 'unknown';
 $gravityButtonAttributes = empty($gravityFlowHost['available']) ? ['disabled' => 'disabled'] : [];
+$gravityTraces = is_array($inboxObservation['traces'] ?? null) ? $inboxObservation['traces'] : [];
+$gravitySessionAnalysis = $inboxObservation['analysis'] ?? [];
 
 $statusLabels = [
     'not_started' => __('Not run yet', 'wp-deep-diagnostics'),
@@ -41,11 +43,11 @@ $actionNotices = [
 ];
 
 $gravityActionNotices = [
-    'observing'                          => ['success', __('Gravity Flow Inbox observation started. Open or refresh the Inbox during the bounded observation window.', 'wp-deep-diagnostics')],
-    'already_observing'                  => ['info', __('A Gravity Flow Inbox observation is already active; the existing bounded session was kept.', 'wp-deep-diagnostics')],
-    'gravity_flow_unavailable'           => ['warning', __('Gravity Flow is not available in this runtime, so Inbox observation was not started.', 'wp-deep-diagnostics')],
-    'session_persistence_failed'         => ['error', __('The Inbox diagnostic session could not be persisted.', 'wp-deep-diagnostics')],
-    'current_session_persistence_failed' => ['error', __('The current Inbox observation pointer could not be persisted.', 'wp-deep-diagnostics')],
+    'observing'                          => ['success', __('Gravity diagnostic started. Submit entries and exercise the Gravity Flow Inbox during the bounded observation window.', 'wp-deep-diagnostics')],
+    'already_observing'                  => ['info', __('A Gravity diagnostic is already active; the existing bounded session was kept.', 'wp-deep-diagnostics')],
+    'gravity_flow_unavailable'           => ['warning', __('Gravity Flow is not available in this runtime, so the Gravity diagnostic was not started.', 'wp-deep-diagnostics')],
+    'session_persistence_failed'         => ['error', __('The Gravity diagnostic session could not be persisted.', 'wp-deep-diagnostics')],
+    'current_session_persistence_failed' => ['error', __('The current Gravity diagnostic pointer could not be persisted.', 'wp-deep-diagnostics')],
 ];
 ?>
 <div class="wrap wddtf-wrap">
@@ -53,16 +55,12 @@ $gravityActionNotices = [
 
     <?php if ( isset($actionNotices[$cronAction]) ) : ?>
         <?php [$noticeType, $noticeText] = $actionNotices[$cronAction]; ?>
-        <div class="notice notice-<?php echo esc_attr($noticeType); ?> inline" role="status">
-            <p><?php echo esc_html($noticeText); ?></p>
-        </div>
+        <div class="notice notice-<?php echo esc_attr($noticeType); ?> inline" role="status"><p><?php echo esc_html($noticeText); ?></p></div>
     <?php endif; ?>
 
     <?php if ( isset($gravityActionNotices[$gravityAction]) ) : ?>
         <?php [$noticeType, $noticeText] = $gravityActionNotices[$gravityAction]; ?>
-        <div class="notice notice-<?php echo esc_attr($noticeType); ?> inline" role="status">
-            <p><?php echo esc_html($noticeText); ?></p>
-        </div>
+        <div class="notice notice-<?php echo esc_attr($noticeType); ?> inline" role="status"><p><?php echo esc_html($noticeText); ?></p></div>
     <?php endif; ?>
 
     <section class="wddtf-card" aria-labelledby="wddtf-cron-title">
@@ -154,7 +152,7 @@ $gravityActionNotices = [
 
     <section class="wddtf-card" aria-labelledby="wddtf-gravity-title">
         <h2 id="wddtf-gravity-title"><?php esc_html_e('Gravity Forms / Gravity Flow Diagnostics', 'wp-deep-diagnostics'); ?></h2>
-        <p><?php esc_html_e('This observer uses the documented Gravity Flow Inbox table filter as a low-overhead signal for Inbox rendering, including live AJAX refreshes. It records bounded timing/context metadata only; form IDs, entry IDs, users, field values, and request payloads are not stored.', 'wp-deep-diagnostics'); ?></p>
+        <p><?php esc_html_e('Start one bounded server-side diagnostic session, then submit entries and exercise the Gravity Flow Inbox. The observer correlates documented Gravity Forms and Gravity Flow lifecycle hooks with the existing Inbox render signal without storing submitted field values, raw host IDs, raw assignee identities, or request payloads.', 'wp-deep-diagnostics'); ?></p>
 
         <div class="wddtf-columns">
             <div>
@@ -168,7 +166,7 @@ $gravityActionNotices = [
             </div>
 
             <div>
-                <h3><?php esc_html_e('Inbox observation', 'wp-deep-diagnostics'); ?></h3>
+                <h3><?php esc_html_e('Active diagnostic session', 'wp-deep-diagnostics'); ?></h3>
                 <?php
                 $inboxNotice = 'info';
                 if ( 'completed' === $inboxStatus ) {
@@ -186,8 +184,10 @@ $gravityActionNotices = [
                 <table class="widefat striped wddtf-kv-table"><tbody>
                     <tr><th scope="row"><?php esc_html_e('Diagnostic session', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($inboxObservation['session_id'] ?? 'n/a')); ?></code></td></tr>
                     <tr><th scope="row"><?php esc_html_e('Expires', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($inboxObservation['expires_at'] ?? 'n/a')); ?></code></td></tr>
-                    <tr><th scope="row"><?php esc_html_e('Samples observed', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) (int) ($inboxObservation['sample_count_total'] ?? 0)); ?></code></td></tr>
-                    <tr><th scope="row"><?php esc_html_e('AJAX samples observed', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) (int) ($inboxObservation['ajax_sample_count'] ?? 0)); ?></code></td></tr>
+                    <tr><th scope="row"><?php esc_html_e('Candidate traces', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) (int) ($inboxObservation['trace_count'] ?? 0)); ?></code></td></tr>
+                    <tr><th scope="row"><?php esc_html_e('First inconsistent point', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($gravitySessionAnalysis['classification'] ?? 'ENTRY_NOT_OBSERVED')); ?></code></td></tr>
+                    <tr><th scope="row"><?php esc_html_e('Inbox samples observed', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) (int) ($inboxObservation['sample_count_total'] ?? 0)); ?></code></td></tr>
+                    <tr><th scope="row"><?php esc_html_e('AJAX Inbox samples observed', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) (int) ($inboxObservation['ajax_sample_count'] ?? 0)); ?></code></td></tr>
                 </tbody></table>
             </div>
         </div>
@@ -195,9 +195,55 @@ $gravityActionNotices = [
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="wddtf-action-form">
             <input type="hidden" name="action" value="wddtf_start_gravityflow_inbox_observation">
             <?php wp_nonce_field('wddtf_start_gravityflow_inbox_observation'); ?>
-            <?php submit_button(__('Start Inbox Observation', 'wp-deep-diagnostics'), 'secondary', 'submit', false, $gravityButtonAttributes); ?>
-            <p class="description"><?php esc_html_e('Explicit action: opens one 15-minute observation window and stores at most 20 Inbox request samples. Open the Gravity Flow Inbox or leave Live Data Refresh running during the window. Client/network round-trip time is not measured, and observed server timing is not treated as root-cause proof.', 'wp-deep-diagnostics'); ?></p>
+            <?php submit_button(__('Start Gravity Diagnostic', 'wp-deep-diagnostics'), 'secondary', 'submit', false, $gravityButtonAttributes); ?>
+            <p class="description"><?php esc_html_e('Explicit action: opens one 15-minute diagnostic window, keeps at most 10 candidate entry traces, 24 lifecycle events per trace, and 20 Inbox request samples. Server-side evidence does not prove browser refresh completion, expected-assignee correctness, or root cause.', 'wp-deep-diagnostics'); ?></p>
         </form>
+
+        <?php if ( ! empty($gravityTraces) ) : ?>
+            <h3><?php esc_html_e('Causal traces', 'wp-deep-diagnostics'); ?></h3>
+            <p class="description"><?php esc_html_e('Trace, form, step, and assignee references are opaque diagnostic identifiers. Evidence is ordered by observation time; missing evidence stays explicit instead of being converted into a failure claim.', 'wp-deep-diagnostics'); ?></p>
+            <?php foreach ( $gravityTraces as $trace ) : ?>
+                <?php $traceAnalysis = $trace['analysis'] ?? []; ?>
+                <details class="wddtf-trace">
+                    <summary>
+                        <code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($trace['trace_ref'] ?? 'n/a')); ?></code>
+                        — <code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($traceAnalysis['classification'] ?? 'INSUFFICIENT_EVIDENCE')); ?></code>
+                    </summary>
+                    <p>
+                        <?php esc_html_e('Form reference', 'wp-deep-diagnostics'); ?>:
+                        <code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($trace['form_ref'] ?? 'n/a')); ?></code>
+                    </p>
+                    <div class="wddtf-table-scroll" tabindex="0" role="region" aria-label="<?php esc_attr_e('Gravity causal trace chronology', 'wp-deep-diagnostics'); ?>">
+                        <table class="widefat striped"><thead><tr>
+                            <th scope="col"><?php esc_html_e('Observed', 'wp-deep-diagnostics'); ?></th>
+                            <th scope="col"><?php esc_html_e('Event', 'wp-deep-diagnostics'); ?></th>
+                            <th scope="col"><?php esc_html_e('Transport', 'wp-deep-diagnostics'); ?></th>
+                            <th scope="col"><?php esc_html_e('Step', 'wp-deep-diagnostics'); ?></th>
+                            <th scope="col"><?php esc_html_e('Step type / status', 'wp-deep-diagnostics'); ?></th>
+                            <th scope="col"><?php esc_html_e('Assignees', 'wp-deep-diagnostics'); ?></th>
+                        </tr></thead><tbody>
+                            <?php foreach ( $trace['events'] ?? [] as $event ) : ?>
+                                <tr>
+                                    <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($event['observed_at'] ?? '')); ?></code></td>
+                                    <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($event['type'] ?? 'unknown')); ?></code></td>
+                                    <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($event['transport'] ?? 'unknown')); ?></code></td>
+                                    <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($event['step_ref'] ?? $event['next_step_ref'] ?? 'n/a')); ?></code></td>
+                                    <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html(trim((string) (($event['step_type'] ?? '') . ' ' . ($event['step_status'] ?? '')))); ?></code></td>
+                                    <td><code class="wddtf-tech" dir="ltr"><?php echo array_key_exists('assignee_count', $event) ? esc_html((string) (int) $event['assignee_count']) : esc_html__('n/a', 'wp-deep-diagnostics'); ?></code></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody></table>
+                    </div>
+                    <p class="description">
+                        <?php esc_html_e('Analysis reason', 'wp-deep-diagnostics'); ?>:
+                        <code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($traceAnalysis['reason'] ?? 'unknown')); ?></code>
+                    </p>
+                </details>
+            <?php endforeach; ?>
+            <?php if ( ! empty($inboxObservation['traces_truncated']) ) : ?>
+                <div class="notice notice-warning inline"><p><?php esc_html_e('The candidate-trace limit was reached. Additional candidate entries were intentionally not retained, so the session is incomplete by design.', 'wp-deep-diagnostics'); ?></p></div>
+            <?php endif; ?>
+        <?php endif; ?>
 
         <?php if ( ! empty($inboxObservation['samples']) ) : ?>
             <h3><?php esc_html_e('Observed Inbox request samples', 'wp-deep-diagnostics'); ?></h3>
@@ -206,6 +252,7 @@ $gravityActionNotices = [
                     <th scope="col"><?php esc_html_e('Observed', 'wp-deep-diagnostics'); ?></th>
                     <th scope="col"><?php esc_html_e('Transport', 'wp-deep-diagnostics'); ?></th>
                     <th scope="col"><?php esc_html_e('Server elapsed (ms)', 'wp-deep-diagnostics'); ?></th>
+                    <th scope="col"><?php esc_html_e('Candidate trace links', 'wp-deep-diagnostics'); ?></th>
                     <th scope="col"><?php esc_html_e('DB queries', 'wp-deep-diagnostics'); ?></th>
                     <th scope="col"><?php esc_html_e('Memory peak', 'wp-deep-diagnostics'); ?></th>
                 </tr></thead><tbody>
@@ -214,6 +261,7 @@ $gravityActionNotices = [
                             <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($sample['observed_at'] ?? '')); ?></code></td>
                             <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($sample['transport'] ?? 'unknown')); ?></code></td>
                             <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($sample['elapsed_ms'] ?? 'n/a')); ?></code></td>
+                            <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html(implode(', ', array_map('strval', $sample['candidate_trace_refs'] ?? []))); ?></code></td>
                             <td><code class="wddtf-tech" dir="ltr"><?php echo null !== ($sample['db_query_count'] ?? null) ? esc_html((string) $sample['db_query_count']) : esc_html__('n/a', 'wp-deep-diagnostics'); ?></code></td>
                             <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html(size_format((int) ($sample['memory_peak_bytes'] ?? 0))); ?></code></td>
                         </tr>

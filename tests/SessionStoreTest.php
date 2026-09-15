@@ -8,6 +8,12 @@ final class SessionStoreTest extends TestCase {
     protected function setUp(): void {
         $GLOBALS['wddtf_test_transients'] = [];
         $GLOBALS['wddtf_test_transient_failures'] = [];
+        $GLOBALS['wddtf_test_options'] = [];
+        $GLOBALS['wpdb'] = new wpdb();
+    }
+
+    protected function tearDown(): void {
+        unset($GLOBALS['wpdb']);
     }
 
     public function test_session_lifecycle_is_bounded_privacy_minimized_and_read_only_on_expiry(): void {
@@ -58,5 +64,269 @@ final class SessionStoreTest extends TestCase {
 
         self::assertNull($store->load($session['id']));
         self::assertSame($before, $GLOBALS['wddtf_test_transients']);
+    }
+
+    public function test_serialized_mutation_reloads_fresh_state_after_lock_acquisition(): void {
+        $store = $this->makeStore('ds-1111111111111111', 'lk-111111111111111111111111');
+        $session = $store->create('gravityflow_inbox_observation', ['events' => []], 900);
+        self::assertNotNull($session);
+
+        $staleSnapshot = $store->load($session['id']);
+        self::assertNotNull($staleSnapshot);
+
+        $fresh = $staleSnapshot;
+        $fresh['data']['events'][] = 'committed-before-lock';
+        self::assertTrue($store->save($fresh));
+
+        $sawFreshState = false;
+        self::assertTrue(
+            $store->mutate(
+                $session['id'],
+                static function(array $locked) use (&$sawFreshState): array {
+                    $sawFreshState = ['committed-before-lock'] === ($locked['data']['events'] ?? []);
+                    $locked['data']['events'][] = 'serialized-mutation';
+                    return $locked;
+                }
+            )
+        );
+
+        self::assertTrue($sawFreshState);
+        self::assertSame(
+            ['committed-before-lock', 'serialized-mutation'],
+            $store->load($session['id'])['data']['events']
+        );
+    }
+
+    public function test_serialized_mutation_closes_stale_interleaving_that_loses_one_trace(): void {
+        $store = $this->makeStore('ds-2222222222222222', 'lk-222222222222222222222222');
+        $session = $store->create('gravityflow_inbox_observation', ['traces' => []], 900);
+        self::assertNotNull($session);
+
+        // Deterministic reproduction of the pre-fix whole-session lost-update interleaving.
+        $writerA = $store->load($session['id']);
+        $writerB = $store->load($session['id']);
+        self::assertNotNull($writerA);
+        self::assertNotNull($writerB);
+        $writerA['data']['traces']['trace-a'] = ['event' => 'a'];
+        $writerB['data']['traces']['trace-b'] = ['event' => 'b'];
+        self::assertTrue($store->save($writerA));
+        self::assertTrue($store->save($writerB));
+        self::assertSame(['trace-b'], array_keys($store->load($session['id'])['data']['traces']));
+
+        $store->delete($session['id']);
+        $session = $store->create('gravityflow_inbox_observation', ['traces' => []], 900);
+        self::assertNotNull($session);
+
+        foreach ( ['trace-a', 'trace-b'] as $trace ) {
+            self::assertTrue(
+                $store->mutate(
+                    $session['id'],
+                    static function(array $locked) use ($trace): array {
+                        $locked['data']['traces'][$trace] = ['event' => substr($trace, -1)];
+                        return $locked;
+                    }
+                )
+            );
+        }
+
+        self::assertSame(
+            ['trace-a', 'trace-b'],
+            array_keys($store->load($session['id'])['data']['traces'])
+        );
+    }
+
+    public function test_serialized_mutation_preserves_overlapping_event_and_sample_updates_and_counters(): void {
+        $store = $this->makeStore('ds-7777777777777777', 'lk-777777777777777777777777');
+        $initial = [
+            'events' => [],
+            'event_count_total' => 0,
+            'samples' => [],
+            'sample_count_total' => 0,
+        ];
+        $session = $store->create('gravityflow_inbox_observation', $initial, 900);
+        self::assertNotNull($session);
+
+        // The old unlocked pattern loses the event update when a stale sample writer saves last.
+        $eventWriter = $store->load($session['id']);
+        $sampleWriter = $store->load($session['id']);
+        self::assertNotNull($eventWriter);
+        self::assertNotNull($sampleWriter);
+        $eventWriter['data']['events'][] = 'event-a';
+        ++$eventWriter['data']['event_count_total'];
+        $sampleWriter['data']['samples'][] = 'sample-b';
+        ++$sampleWriter['data']['sample_count_total'];
+        self::assertTrue($store->save($eventWriter));
+        self::assertTrue($store->save($sampleWriter));
+        $lostUpdate = $store->load($session['id'])['data'];
+        self::assertSame([], $lostUpdate['events']);
+        self::assertSame(0, $lostUpdate['event_count_total']);
+        self::assertSame(['sample-b'], $lostUpdate['samples']);
+        self::assertSame(1, $lostUpdate['sample_count_total']);
+
+        $store->delete($session['id']);
+        $session = $store->create('gravityflow_inbox_observation', $initial, 900);
+        self::assertNotNull($session);
+
+        self::assertTrue(
+            $store->mutate(
+                $session['id'],
+                static function(array $locked): array {
+                    $locked['data']['events'][] = 'event-a';
+                    ++$locked['data']['event_count_total'];
+                    return $locked;
+                }
+            )
+        );
+        self::assertTrue(
+            $store->mutate(
+                $session['id'],
+                static function(array $locked): array {
+                    $locked['data']['samples'][] = 'sample-b';
+                    ++$locked['data']['sample_count_total'];
+                    return $locked;
+                }
+            )
+        );
+
+        $serialized = $store->load($session['id'])['data'];
+        self::assertSame(['event-a'], $serialized['events']);
+        self::assertSame(1, $serialized['event_count_total']);
+        self::assertSame(['sample-b'], $serialized['samples']);
+        self::assertSame(1, $serialized['sample_count_total']);
+    }
+
+    public function test_lock_ownership_prevents_writer_from_releasing_replacement_lock(): void {
+        $store = $this->makeStore('ds-3333333333333333', 'lk-333333333333333333333333');
+        $session = $store->create('gravityflow_inbox_observation', ['count' => 0], 900);
+        self::assertNotNull($session);
+        $lockKey = $this->lockKey($session['id']);
+        $replacement = [
+            'owner' => 'lk-aaaaaaaaaaaaaaaaaaaaaaaa',
+            'expires_at' => 2000,
+        ];
+
+        $result = $store->mutate(
+            $session['id'],
+            static function(array $locked) use ($lockKey, $replacement): array {
+                // Simulate a replacement owner appearing before the first owner can commit/release.
+                $GLOBALS['wddtf_test_options'][$lockKey]['value'] = $replacement;
+                ++$locked['data']['count'];
+                return $locked;
+            }
+        );
+
+        self::assertFalse($result);
+        self::assertSame($replacement, get_option($lockKey));
+        self::assertSame(0, $store->load($session['id'])['data']['count']);
+        self::assertTrue($store->integrityStatus($session['id'])['uncertain']);
+        self::assertSame('mutation_lock_lost', $store->integrityStatus($session['id'])['reason']);
+    }
+
+    public function test_expired_lock_lease_is_revalidated_before_session_commit(): void {
+        $now = 1000;
+        $store = new SessionStore(
+            static function() use (&$now): int { return $now; },
+            static fn(): string => 'ds-6666666666666666',
+            static fn(): string => 'lk-666666666666666666666666',
+            static function(int $microseconds): void {}
+        );
+        $session = $store->create('gravityflow_inbox_observation', ['count' => 0], 900);
+        self::assertNotNull($session);
+
+        $result = $store->mutate(
+            $session['id'],
+            static function(array $locked) use (&$now): array {
+                ++$locked['data']['count'];
+                $now = 1031; // Beyond the 30-second ownership lease.
+                return $locked;
+            }
+        );
+
+        self::assertFalse($result);
+        self::assertSame(0, $store->load($session['id'])['data']['count']);
+        self::assertSame('mutation_lock_lost', $store->integrityStatus($session['id'])['reason']);
+        self::assertFalse(get_option($this->lockKey($session['id']), false));
+    }
+
+    public function test_stale_lock_recovery_is_owner_safe_and_bounded(): void {
+        $now = 1000;
+        $sleepCalls = 0;
+        $store = new SessionStore(
+            static function() use (&$now): int { return $now; },
+            static fn(): string => 'ds-4444444444444444',
+            static fn(): string => 'lk-444444444444444444444444',
+            static function(int $microseconds) use (&$sleepCalls): void { ++$sleepCalls; }
+        );
+        $session = $store->create('gravityflow_inbox_observation', ['count' => 0], 900);
+        self::assertNotNull($session);
+        $lockKey = $this->lockKey($session['id']);
+
+        add_option(
+            $lockKey,
+            ['owner' => 'lk-bbbbbbbbbbbbbbbbbbbbbbbb', 'expires_at' => 999],
+            '',
+            false
+        );
+
+        self::assertTrue(
+            $store->mutate(
+                $session['id'],
+                static function(array $locked): array {
+                    ++$locked['data']['count'];
+                    return $locked;
+                }
+            )
+        );
+        self::assertFalse(get_option($lockKey, false));
+        self::assertSame(0, $sleepCalls);
+
+        add_option(
+            $lockKey,
+            ['owner' => 'lk-cccccccccccccccccccccccc', 'expires_at' => 2000],
+            '',
+            false
+        );
+        self::assertFalse($store->mutate($session['id'], static fn(array $locked): array => $locked));
+        self::assertSame(7, $sleepCalls);
+        self::assertSame('lk-cccccccccccccccccccccccc', get_option($lockKey)['owner']);
+        self::assertSame('mutation_lock_unavailable', $store->integrityStatus($session['id'])['reason']);
+    }
+
+    public function test_persistence_failure_marks_integrity_uncertain_outside_failed_session_write(): void {
+        $store = $this->makeStore('ds-5555555555555555', 'lk-555555555555555555555555');
+        $session = $store->create('gravityflow_inbox_observation', ['count' => 0], 900);
+        self::assertNotNull($session);
+
+        $sessionKey = array_key_first($GLOBALS['wddtf_test_transients']);
+        self::assertIsString($sessionKey);
+        $GLOBALS['wddtf_test_transient_failures'][] = $sessionKey;
+
+        self::assertFalse(
+            $store->mutate(
+                $session['id'],
+                static function(array $locked): array {
+                    ++$locked['data']['count'];
+                    return $locked;
+                }
+            )
+        );
+
+        $integrity = $store->integrityStatus($session['id']);
+        self::assertTrue($integrity['uncertain']);
+        self::assertSame('mutation_persistence_failed', $integrity['reason']);
+        self::assertSame(0, $store->load($session['id'])['data']['count']);
+    }
+
+    private function makeStore(string $sessionId, string $lockToken): SessionStore {
+        return new SessionStore(
+            static fn(): int => 1000,
+            static fn(): string => $sessionId,
+            static fn(): string => $lockToken,
+            static function(int $microseconds): void {}
+        );
+    }
+
+    private function lockKey(string $sessionId): string {
+        return 'wddtf_diag_lock_' . substr(hash('sha256', $sessionId), 0, 32);
     }
 }
