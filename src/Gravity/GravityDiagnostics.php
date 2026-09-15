@@ -601,6 +601,12 @@ final class GravityDiagnostics {
         $total = max(0, (int) ($data['sample_count_total'] ?? count($samples)));
         $ajaxSamples = count(array_filter($samples, static fn(mixed $sample): bool => is_array($sample) && 'ajax' === ($sample['transport'] ?? null)));
         $browserEvidenceCount = count(array_filter($samples, static fn(mixed $sample): bool => is_array($sample) && is_array($sample['browser'] ?? null)));
+        $clientDurationMeasured = count(array_filter(
+            $samples,
+            static fn(mixed $sample): bool => is_array($sample)
+                && is_array($sample['browser'] ?? null)
+                && is_numeric($sample['browser']['duration_ms'] ?? null)
+        )) > 0;
         $lastObserved = is_int($data['last_observed_timestamp'] ?? null) ? $data['last_observed_timestamp'] : null;
         $integrity = $this->sessions->integrityStatus($session['id']);
 
@@ -661,7 +667,7 @@ final class GravityDiagnostics {
                 'session_integrity_uncertain'      => ! empty($integrity['uncertain']),
             ],
             'unknowns'                => [
-                'client_round_trip_not_measured'             => 0 === $browserEvidenceCount,
+                'client_round_trip_not_measured'             => ! $clientDurationMeasured,
                 'entry_visible_to_user_not_proven'           => true,
                 'root_cause_not_inferred'                    => true,
                 'expected_assignee_not_configured'           => true,
@@ -985,24 +991,27 @@ final class GravityDiagnostics {
         }
         $receivedSeconds = intdiv($clientReceivedMs, 1000);
         $serverReceived = ($this->clock)();
+        $browser = [
+            'client_received_timestamp_ms' => $clientReceivedMs,
+            'client_received_at' => gmdate('c', $receivedSeconds),
+            'server_received_timestamp' => $serverReceived,
+            'server_received_at' => gmdate('c', $serverReceived),
+            'outcome' => $outcome,
+            'http_status' => $httpStatus,
+            'visibility' => $visibility,
+            'ui_signal' => $uiSignal,
+            'title_changed' => in_array($uiSignal, ['title_change', 'both'], true),
+            'dom_mutation_observed' => in_array($uiSignal, ['dom_mutation', 'both'], true),
+            'response_body_stored' => false,
+            'request_body_stored' => false,
+            'dom_content_stored' => false,
+        ];
+        if ( null !== $duration ) {
+            $browser['duration_ms'] = $duration;
+        }
         return [
             'sample_ref' => $sampleRef,
-            'browser' => [
-                'client_received_timestamp_ms' => $clientReceivedMs,
-                'client_received_at' => gmdate('c', $receivedSeconds),
-                'server_received_timestamp' => $serverReceived,
-                'server_received_at' => gmdate('c', $serverReceived),
-                'outcome' => $outcome,
-                'http_status' => $httpStatus,
-                'duration_ms' => $duration,
-                'visibility' => $visibility,
-                'ui_signal' => $uiSignal,
-                'title_changed' => in_array($uiSignal, ['title_change', 'both'], true),
-                'dom_mutation_observed' => in_array($uiSignal, ['dom_mutation', 'both'], true),
-                'response_body_stored' => false,
-                'request_body_stored' => false,
-                'dom_content_stored' => false,
-            ],
+            'browser' => $browser,
         ];
     }
 
