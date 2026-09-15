@@ -36,31 +36,45 @@ final class GravityBrowserTimingRepairTest extends TestCase {
         self::assertFalse($observation['browser_analysis']['entry_visible_to_user_proven']);
     }
 
-    public function test_client_source_separates_request_start_response_receipt_and_ui_baseline(): void {
+    public function test_client_source_uses_prefilter_completion_before_consumer_callbacks_and_keeps_send_for_timing_only(): void {
         $source = (string) file_get_contents(dirname(__DIR__) . '/assets/gravity-browser-observer.js');
 
         self::assertStringContainsString('startedAt: performanceNow()', $source);
-        self::assertStringNotContainsString('function stateFor', $source);
+        self::assertStringContainsString('$.ajaxPrefilter(function (_options, _originalOptions, jqXHR)', $source);
+        self::assertStringContainsString('jqXHR.always(function () {', $source);
+        self::assertStringContainsString('observeCompletion(jqXHR);', $source);
+        self::assertStringNotContainsString('ajaxComplete.wddtfGravityBrowserEvidence', $source);
         self::assertSame(1, substr_count($source, 'Date.now()'));
 
+        $prefilter = strpos($source, '$.ajaxPrefilter(function');
         $sendStart = strpos($source, "ajaxSend.wddtfGravityBrowserEvidence");
-        $completeStart = strpos($source, "ajaxComplete.wddtfGravityBrowserEvidence");
+        self::assertIsInt($prefilter);
         self::assertIsInt($sendStart);
-        self::assertIsInt($completeStart);
-        $sendBlock = substr($source, $sendStart, $completeStart - $sendStart);
+        self::assertLessThan($sendStart, $prefilter);
+
+        $completionStart = strpos($source, 'function observeCompletion(xhr)');
+        self::assertIsInt($completionStart);
+        $completionBlock = substr($source, $completionStart, $prefilter - $completionStart);
+        self::assertStringContainsString('xhr.getResponseHeader(config.headerName)', $completionBlock);
+        self::assertStringContainsString('var clientReceivedMs = Date.now();', $completionBlock);
+        self::assertStringContainsString('var responseBaseline = {', $completionBlock);
+        self::assertStringContainsString('window.setTimeout(function ()', $completionBlock);
+
+        $sendBlock = substr($source, $sendStart);
         self::assertStringNotContainsString('mutationSequence:', $sendBlock);
         self::assertStringNotContainsString('title:', $sendBlock);
+        self::assertStringNotContainsString('getResponseHeader', $sendBlock);
 
-        $receipt = strpos($source, 'var clientReceivedMs = Date.now();');
-        $baseline = strpos($source, 'var responseBaseline = {');
-        $delay = strpos($source, 'window.setTimeout(function ()');
+        $receipt = strpos($completionBlock, 'var clientReceivedMs = Date.now();');
+        $baseline = strpos($completionBlock, 'var responseBaseline = {');
+        $delay = strpos($completionBlock, 'window.setTimeout(function ()');
         self::assertIsInt($receipt);
         self::assertIsInt($baseline);
         self::assertIsInt($delay);
         self::assertLessThan($baseline, $receipt);
         self::assertLessThan($delay, $baseline);
-        self::assertStringContainsString('client_received_ms: clientReceivedMs', $source);
-        self::assertStringContainsString('ui_signal: classifyUiSignal(responseBaseline)', $source);
+        self::assertStringContainsString('client_received_ms: clientReceivedMs', $completionBlock);
+        self::assertStringContainsString('ui_signal: classifyUiSignal(responseBaseline)', $completionBlock);
     }
 
     public function test_cron_truncation_markup_has_no_unmatched_wrapper_close(): void {
