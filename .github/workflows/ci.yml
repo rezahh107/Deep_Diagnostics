@@ -29,6 +29,8 @@ jobs:
           set -euo pipefail
           printf '%s\0' wp-deep-diagnostics.php uninstall.php | xargs -0 -n1 php -l
           find src templates tests -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Focused privacy regression
+        run: vendor/bin/phpunit tests/PrivacyBoundaryTest.php
       - name: PHPUnit
         run: composer test
       - name: Deterministic package
