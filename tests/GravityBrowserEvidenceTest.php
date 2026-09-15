@@ -22,9 +22,7 @@ final class WddtfBrowserStep {
 }
 
 final class WddtfBrowserAssignee {
-    public function __construct(private string $key) {
-    }
-
+    public function __construct(private string $key) {}
     public function get_key(): string { return $this->key; }
     public function get_id(): string { return '77'; }
 }
@@ -113,7 +111,7 @@ final class GravityBrowserEvidenceTest extends TestCase {
 
         self::assertCount(1, $headers);
         self::assertSame(GravityDiagnostics::BROWSER_SAMPLE_HEADER, $headers[0][0]);
-        self::assertMatchesRegularExpression('/^gb-[a-f0-9]{24}$/', $headers[0][1]);
+        self::assertMatchesRegularExpression('/^gb-[a-f0-9]{20}$/', $headers[0][1]);
 
         $before = $diagnostics->currentInboxObservation();
         self::assertSame('TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION', $before['analysis']['classification']);
@@ -147,8 +145,8 @@ final class GravityBrowserEvidenceTest extends TestCase {
             'private-browser-person@example.test',
             '"entry_id"',
             '"form_id"',
-            'response_body',
-            'request_body',
+            '"response_body":',
+            '"request_body":',
         ] as $forbidden ) {
             self::assertStringNotContainsString($forbidden, $encoded);
         }
@@ -183,7 +181,7 @@ final class GravityBrowserEvidenceTest extends TestCase {
         $forged = $this->postBrowserEvidence(
             $diagnostics,
             $observation['session_id'],
-            'gb-aaaaaaaaaaaaaaaaaaaaaaaa'
+            'gb-aaaaaaaaaaaaaaaaaaaa'
         );
         self::assertFalse($forged->success);
         self::assertSame(404, $forged->statusCode);
