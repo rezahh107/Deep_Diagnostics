@@ -10,7 +10,7 @@ final class SessionStoreTest extends TestCase {
         $GLOBALS['wddtf_test_transient_failures'] = [];
     }
 
-    public function test_session_lifecycle_is_bounded_and_privacy_minimized(): void {
+    public function test_session_lifecycle_is_bounded_privacy_minimized_and_read_only_on_expiry(): void {
         $now = 1000;
         $store = new SessionStore(
             static function() use (&$now): int { return $now; },
@@ -36,11 +36,15 @@ final class SessionStoreTest extends TestCase {
         self::assertSame('updated', $store->load($session['id'])['data']['safe']);
 
         $now = 1120;
+        $before = $GLOBALS['wddtf_test_transients'];
         self::assertNull($store->load($session['id']));
+        self::assertSame($before, $GLOBALS['wddtf_test_transients']);
+
+        $store->delete($session['id']);
         self::assertSame([], $GLOBALS['wddtf_test_transients']);
     }
 
-    public function test_malformed_persisted_session_is_rejected_and_deleted(): void {
+    public function test_malformed_persisted_session_is_rejected_without_passive_cleanup(): void {
         $store = new SessionStore(
             static fn(): int => 1000,
             static fn(): string => 'ds-bbbbbbbbbbbbbbbb'
@@ -50,8 +54,9 @@ final class SessionStoreTest extends TestCase {
 
         $key = array_key_first($GLOBALS['wddtf_test_transients']);
         $GLOBALS['wddtf_test_transients'][$key]['value'] = ['id' => $session['id'], 'data' => 'malformed'];
+        $before = $GLOBALS['wddtf_test_transients'];
 
         self::assertNull($store->load($session['id']));
-        self::assertArrayNotHasKey($key, $GLOBALS['wddtf_test_transients']);
+        self::assertSame($before, $GLOBALS['wddtf_test_transients']);
     }
 }
