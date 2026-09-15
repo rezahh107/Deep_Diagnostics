@@ -55,6 +55,14 @@ final class Admin_Page {
             wp_die(esc_html__('Access denied', 'wp-deep-diagnostics'));
         }
 
+        $method = isset($_SERVER['REQUEST_METHOD']) && is_string($_SERVER['REQUEST_METHOD'])
+            ? strtoupper(sanitize_text_field(wp_unslash($_SERVER['REQUEST_METHOD'])))
+            : '';
+
+        if ( 'POST' !== $method ) {
+            wp_die(esc_html__('Cron qualification requires an explicit POST request.', 'wp-deep-diagnostics'));
+        }
+
         check_admin_referer(self::CRON_ACTION);
         $result = $this->manager->startCronQualification();
         $reason = sanitize_key((string) ($result['reason'] ?? 'unknown'));
