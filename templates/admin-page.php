@@ -16,6 +16,10 @@ $inboxStatus = is_string($inboxObservation['status'] ?? null) ? $inboxObservatio
 $gravityButtonAttributes = empty($gravityFlowHost['available']) ? ['disabled' => 'disabled'] : [];
 $gravityTraces = is_array($inboxObservation['traces'] ?? null) ? $inboxObservation['traces'] : [];
 $gravitySessionAnalysis = $inboxObservation['analysis'] ?? [];
+$gravityBrowserAnalysis = $inboxObservation['browser_analysis'] ?? [];
+$gravityBrowserClassification = is_string($gravityBrowserAnalysis['classification'] ?? null)
+    ? $gravityBrowserAnalysis['classification']
+    : 'BROWSER_EVIDENCE_INSUFFICIENT';
 
 $statusLabels = [
     'not_started' => __('Not run yet', 'wp-deep-diagnostics'),
@@ -32,6 +36,31 @@ $inboxStatusLabels = [
     'error'       => __('Error', 'wp-deep-diagnostics'),
     'unknown'     => __('Unknown / expired', 'wp-deep-diagnostics'),
 ];
+
+$browserGuidance = [
+    'BROWSER_UI_SIGNAL_OBSERVED' => [
+        __('A correlated Inbox refresh response reached this browser and a metadata-only title or DOM mutation signal was observed afterward.', 'wp-deep-diagnostics'),
+        __('Confirm the expected Inbox row visually on the real licensed Gravity Flow site. DEEP has not proved which content became visible to the user.', 'wp-deep-diagnostics'),
+    ],
+    'BROWSER_RESPONSE_RECEIVED' => [
+        __('A correlated Inbox refresh response reached this browser, but no supported UI-side title or DOM mutation signal was observed in the short evidence window.', 'wp-deep-diagnostics'),
+        __('Reproduce once more with the relevant Inbox open and visible. If the row still does not visibly update, inspect the technical evidence without treating the missing UI signal as proof that Gravity Flow is broken.', 'wp-deep-diagnostics'),
+    ],
+    'BROWSER_REFRESH_NOT_OBSERVED' => [
+        __('The server produced a candidate-linked Inbox refresh signal, but this diagnostic session did not receive matching browser evidence.', 'wp-deep-diagnostics'),
+        __('Keep the relevant Inbox open as a logged-in user who can access the Gravity Flow Inbox, then reproduce the submission during the active diagnostic window.', 'wp-deep-diagnostics'),
+    ],
+    'BROWSER_EVIDENCE_AMBIGUOUS' => [
+        __('Browser evidence was received, but more than one candidate trace could plausibly be linked to the correlated refresh.', 'wp-deep-diagnostics'),
+        __('Reproduce with one candidate submission in the diagnostic window so the existing opaque correlation can resolve the evidence without timing guesses.', 'wp-deep-diagnostics'),
+    ],
+    'BROWSER_EVIDENCE_INSUFFICIENT' => [
+        __('There is not enough correlated browser evidence to say whether a relevant Live Refresh reached the browser.', 'wp-deep-diagnostics'),
+        __('Start or keep the diagnostic active, keep/open the relevant Inbox, reproduce the submission, then return here. Tokenized or unauthenticated Inbox contexts are not qualified by this browser collector.', 'wp-deep-diagnostics'),
+    ],
+];
+[$browserMeaning, $browserNextStep] = $browserGuidance[$gravityBrowserClassification]
+    ?? $browserGuidance['BROWSER_EVIDENCE_INSUFFICIENT'];
 
 $actionNotices = [
     'scheduled'                          => ['success', __('Cron qualification probe scheduled.', 'wp-deep-diagnostics')],
@@ -145,14 +174,27 @@ $gravityActionNotices = [
                 </tbody></table>
             </div>
             <?php if ( ! empty($ready['truncated']) ) : ?>
-                <p class="description"><?php esc_html_e('The displayed event list is bounded and truncated; the total count above includes all ready event instances observed.', 'wp-deep-diagnostics'); ?></p>
+                <p class="description"><?php esc_html_e('The displayed event list is bounded and truncated; the total count above includes all ready event instances observed.', 'wp-deep-diagnostics'); ?></p></div>
             <?php endif; ?>
         <?php endif; ?>
     </section>
 
     <section class="wddtf-card" aria-labelledby="wddtf-gravity-title">
         <h2 id="wddtf-gravity-title"><?php esc_html_e('Gravity Forms / Gravity Flow Diagnostics', 'wp-deep-diagnostics'); ?></h2>
-        <p><?php esc_html_e('Start one bounded server-side diagnostic session, then submit entries and exercise the Gravity Flow Inbox. The observer correlates documented Gravity Forms and Gravity Flow lifecycle hooks with the existing Inbox render signal without storing submitted field values, raw host IDs, raw assignee identities, or request payloads.', 'wp-deep-diagnostics'); ?></p>
+        <p><?php esc_html_e('This bounded diagnostic follows the server-side lifecycle into the Gravity Flow Inbox and, when an authorized Inbox browser is open, can separately record whether a candidate-linked refresh response reached that browser. It never stores Inbox row content, submitted field values, request/response bodies, raw host IDs, or generic AJAX traffic.', 'wp-deep-diagnostics'); ?></p>
+
+        <h3><?php esc_html_e('How to run this diagnostic', 'wp-deep-diagnostics'); ?></h3>
+        <ol>
+            <li><?php esc_html_e('Start the Gravity diagnostic below. This opens one 15-minute bounded evidence window.', 'wp-deep-diagnostics'); ?></li>
+            <li><?php esc_html_e('Keep or open the relevant Gravity Flow Inbox as the logged-in Inbox operator who normally receives the work.', 'wp-deep-diagnostics'); ?></li>
+            <li><?php esc_html_e('Reproduce one submission. DEEP observes documented server lifecycle signals and only browser refreshes positively tagged by that server-side Inbox evidence.', 'wp-deep-diagnostics'); ?></li>
+            <li><?php esc_html_e('Return to this page and read Result → meaning → next step. UNKNOWN or AMBIGUOUS means evidence is incomplete; it is not a product-failure verdict.', 'wp-deep-diagnostics'); ?></li>
+        </ol>
+
+        <div class="notice notice-info inline"><p>
+            <strong><?php esc_html_e('Browser evidence ceiling:', 'wp-deep-diagnostics'); ?></strong>
+            <?php esc_html_e('a response receipt or metadata-only title/DOM mutation signal does not prove that the expected Entry became visible to the user. Authentic Gravity Flow browser behavior still requires qualification on a licensed site.', 'wp-deep-diagnostics'); ?>
+        </p></div>
 
         <div class="wddtf-columns">
             <div>
@@ -185,22 +227,30 @@ $gravityActionNotices = [
                     <tr><th scope="row"><?php esc_html_e('Diagnostic session', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($inboxObservation['session_id'] ?? 'n/a')); ?></code></td></tr>
                     <tr><th scope="row"><?php esc_html_e('Expires', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($inboxObservation['expires_at'] ?? 'n/a')); ?></code></td></tr>
                     <tr><th scope="row"><?php esc_html_e('Candidate traces', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) (int) ($inboxObservation['trace_count'] ?? 0)); ?></code></td></tr>
-                    <tr><th scope="row"><?php esc_html_e('First inconsistent point', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($gravitySessionAnalysis['classification'] ?? 'ENTRY_NOT_OBSERVED')); ?></code></td></tr>
+                    <tr><th scope="row"><?php esc_html_e('Server result', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($gravitySessionAnalysis['classification'] ?? 'ENTRY_NOT_OBSERVED')); ?></code></td></tr>
                     <tr><th scope="row"><?php esc_html_e('Inbox samples observed', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) (int) ($inboxObservation['sample_count_total'] ?? 0)); ?></code></td></tr>
-                    <tr><th scope="row"><?php esc_html_e('AJAX Inbox samples observed', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) (int) ($inboxObservation['ajax_sample_count'] ?? 0)); ?></code></td></tr>
+                    <tr><th scope="row"><?php esc_html_e('Browser evidence samples', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) (int) ($inboxObservation['browser_evidence_count'] ?? 0)); ?></code></td></tr>
                 </tbody></table>
             </div>
         </div>
+
+        <h3><?php esc_html_e('Result', 'wp-deep-diagnostics'); ?></h3>
+        <table class="widefat striped wddtf-kv-table"><tbody>
+            <tr><th scope="row"><?php esc_html_e('Browser result', 'wp-deep-diagnostics'); ?></th><td><code class="wddtf-tech" dir="ltr"><?php echo esc_html($gravityBrowserClassification); ?></code></td></tr>
+            <tr><th scope="row"><?php esc_html_e('Plain-language meaning', 'wp-deep-diagnostics'); ?></th><td><?php echo esc_html($browserMeaning); ?></td></tr>
+            <tr><th scope="row"><?php esc_html_e('Next step', 'wp-deep-diagnostics'); ?></th><td><?php echo esc_html($browserNextStep); ?></td></tr>
+            <tr><th scope="row"><?php esc_html_e('Entry visible to user proven', 'wp-deep-diagnostics'); ?></th><td><?php echo ! empty($gravityBrowserAnalysis['entry_visible_to_user_proven']) ? esc_html__('Yes', 'wp-deep-diagnostics') : esc_html__('No', 'wp-deep-diagnostics'); ?></td></tr>
+        </tbody></table>
 
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="wddtf-action-form">
             <input type="hidden" name="action" value="wddtf_start_gravityflow_inbox_observation">
             <?php wp_nonce_field('wddtf_start_gravityflow_inbox_observation'); ?>
             <?php submit_button(__('Start Gravity Diagnostic', 'wp-deep-diagnostics'), 'secondary', 'submit', false, $gravityButtonAttributes); ?>
-            <p class="description"><?php esc_html_e('Explicit action: opens one 15-minute diagnostic window, keeps at most 10 candidate entry traces, 24 lifecycle events per trace, and 20 Inbox request samples. Server-side evidence does not prove browser refresh completion, expected-assignee correctness, or root cause.', 'wp-deep-diagnostics'); ?></p>
+            <p class="description"><?php esc_html_e('Explicit action: opens one 15-minute diagnostic window, keeps at most 10 candidate entry traces, 24 lifecycle events per trace, and 20 Inbox request samples. Starting remains restricted to administrators; browser evidence collection uses the logged-in Gravity Flow Inbox permission and a session-bound nonce.', 'wp-deep-diagnostics'); ?></p>
         </form>
 
         <?php if ( ! empty($gravityTraces) ) : ?>
-            <h3><?php esc_html_e('Causal traces', 'wp-deep-diagnostics'); ?></h3>
+            <h3><?php esc_html_e('Technical evidence — causal traces', 'wp-deep-diagnostics'); ?></h3>
             <p class="description"><?php esc_html_e('Trace, form, step, and assignee references are opaque diagnostic identifiers. Evidence is ordered by observation time; missing evidence stays explicit instead of being converted into a failure claim.', 'wp-deep-diagnostics'); ?></p>
             <?php foreach ( $gravityTraces as $trace ) : ?>
                 <?php $traceAnalysis = $trace['analysis'] ?? []; ?>
@@ -246,15 +296,15 @@ $gravityActionNotices = [
         <?php endif; ?>
 
         <?php if ( ! empty($inboxObservation['samples']) ) : ?>
-            <h3><?php esc_html_e('Observed Inbox request samples', 'wp-deep-diagnostics'); ?></h3>
+            <h3><?php esc_html_e('Technical evidence — observed Inbox request samples', 'wp-deep-diagnostics'); ?></h3>
             <div class="wddtf-table-scroll" tabindex="0" role="region" aria-label="<?php esc_attr_e('Observed Gravity Flow Inbox request samples', 'wp-deep-diagnostics'); ?>">
                 <table class="widefat striped"><thead><tr>
                     <th scope="col"><?php esc_html_e('Observed', 'wp-deep-diagnostics'); ?></th>
                     <th scope="col"><?php esc_html_e('Transport', 'wp-deep-diagnostics'); ?></th>
                     <th scope="col"><?php esc_html_e('Server elapsed (ms)', 'wp-deep-diagnostics'); ?></th>
                     <th scope="col"><?php esc_html_e('Candidate trace links', 'wp-deep-diagnostics'); ?></th>
-                    <th scope="col"><?php esc_html_e('DB queries', 'wp-deep-diagnostics'); ?></th>
-                    <th scope="col"><?php esc_html_e('Memory peak', 'wp-deep-diagnostics'); ?></th>
+                    <th scope="col"><?php esc_html_e('Browser sample', 'wp-deep-diagnostics'); ?></th>
+                    <th scope="col"><?php esc_html_e('Browser outcome / UI signal', 'wp-deep-diagnostics'); ?></th>
                 </tr></thead><tbody>
                     <?php foreach ( $inboxObservation['samples'] as $sample ) : ?>
                         <tr>
@@ -262,8 +312,8 @@ $gravityActionNotices = [
                             <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($sample['transport'] ?? 'unknown')); ?></code></td>
                             <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($sample['elapsed_ms'] ?? 'n/a')); ?></code></td>
                             <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html(implode(', ', array_map('strval', $sample['candidate_trace_refs'] ?? []))); ?></code></td>
-                            <td><code class="wddtf-tech" dir="ltr"><?php echo null !== ($sample['db_query_count'] ?? null) ? esc_html((string) $sample['db_query_count']) : esc_html__('n/a', 'wp-deep-diagnostics'); ?></code></td>
-                            <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html(size_format((int) ($sample['memory_peak_bytes'] ?? 0))); ?></code></td>
+                            <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($sample['sample_ref'] ?? 'n/a')); ?></code></td>
+                            <td><code class="wddtf-tech" dir="ltr"><?php echo esc_html(trim((string) (($sample['browser']['outcome'] ?? 'not received') . ' ' . ($sample['browser']['ui_signal'] ?? '')))); ?></code></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody></table>
