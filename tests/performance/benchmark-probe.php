@@ -50,7 +50,7 @@ final class WDDTF_Performance_Benchmark_Probe {
             $handle = 'wddtf-perf-style-' . $index;
             wp_register_style(
                 $handle,
-                includes_url('css/buttons.min.css') . '?fixture=' . $index,
+                includes_url('css/dashicons.min.css') . '?fixture=' . $index,
                 [],
                 null
             );

@@ -70,7 +70,7 @@ final class WddtfPerformanceBenchmarkSummary {
 
                 $controlStats = self::stats($control, $kind);
                 $activeStats  = self::stats($active, $kind);
-                $deltaStats   = self::stats($paired, 'float');
+                $deltaStats   = self::stats($paired, $kind);
                 $medianDelta  = (float) $activeStats['median'] - (float) $controlStats['median'];
 
                 $summary = [
