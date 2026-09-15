@@ -103,22 +103,27 @@ function cleanProductReports(string $wordpressDir): void {
 }
 
 /** @return array{body:string,http_code:int,effective_url:string,wall_ms:float} */
-function httpRequest(string $url, string $cookieJar, ?array $postFields = null): array {
+function httpRequest(string $url, ?string $cookieJar, ?array $postFields = null): array {
     $handle = curl_init($url);
     if ( false === $handle ) {
         throw new RuntimeException('Unable to initialize cURL.');
     }
 
-    curl_setopt_array($handle, [
+    $curlOptions = [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_MAXREDIRS      => 5,
         CURLOPT_CONNECTTIMEOUT => 5,
         CURLOPT_TIMEOUT        => 30,
-        CURLOPT_COOKIEJAR      => $cookieJar,
-        CURLOPT_COOKIEFILE     => $cookieJar,
         CURLOPT_USERAGENT      => 'WDDTF-Performance-Qualification/1',
-    ]);
+    ];
+
+    if ( null !== $cookieJar && '' !== $cookieJar ) {
+        $curlOptions[CURLOPT_COOKIEJAR]  = $cookieJar;
+        $curlOptions[CURLOPT_COOKIEFILE] = $cookieJar;
+    }
+
+    curl_setopt_array($handle, $curlOptions);
 
     if ( null !== $postFields ) {
         curl_setopt($handle, CURLOPT_POST, true);
@@ -170,7 +175,7 @@ function loginAdmin(string $baseUrl, string $cookieJar): void {
 function measuredRequest(
     string $baseUrl,
     string $path,
-    string $cookieJar,
+    ?string $cookieJar,
     string $probeDir,
     string $sampleId,
     bool $expectActive,
@@ -261,13 +266,14 @@ try {
             foreach ( $order as $state ) {
                 setDeepState($wordpressDir, $state);
                 cleanProductReports($wordpressDir);
+                $requestCookieJar = $scenario['requires_admin'] ? $cookieJar : null;
 
                 for ( $warmup = 1; $warmup <= $warmups; $warmup++ ) {
                     $warmupId = sprintf('warmup-%s-p%d-%s-%d', $scenarioId, $pair, $state, $warmup);
                     measuredRequest(
                         $baseUrl,
                         $scenario['path'],
-                        $cookieJar,
+                        $requestCookieJar,
                         $probeDir,
                         $warmupId,
                         'active' === $state,
@@ -283,7 +289,7 @@ try {
                 $metrics = measuredRequest(
                     $baseUrl,
                     $scenario['path'],
-                    $cookieJar,
+                    $requestCookieJar,
                     $probeDir,
                     $sampleId,
                     'active' === $state,
