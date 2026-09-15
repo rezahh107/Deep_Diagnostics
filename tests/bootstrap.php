@@ -41,6 +41,7 @@ $GLOBALS['wddtf_test_cron_events'] = [];
 $GLOBALS['wddtf_test_ready_cron_jobs'] = [];
 $GLOBALS['wddtf_test_schedule_calls'] = [];
 $GLOBALS['wddtf_test_schedule_result'] = true;
+$GLOBALS['wddtf_test_hide_scheduled_events'] = false;
 
 function add_action(string $hook, callable $callback, int $priority = 10, int $accepted_args = 1): bool {
     $GLOBALS['wddtf_test_actions'][$hook][] = [$callback, $priority, $accepted_args];
@@ -136,6 +137,10 @@ function wp_schedule_single_event(int $timestamp, string $hook, array $args = []
 }
 
 function wp_get_scheduled_event(string $hook, array $args = [], ?int $timestamp = null): object|false {
+    if ( ! empty($GLOBALS['wddtf_test_hide_scheduled_events']) ) {
+        return false;
+    }
+
     foreach ( $GLOBALS['wddtf_test_cron_events'] as $event ) {
         if ( $event->hook !== $hook || $event->args !== $args ) {
             continue;
