@@ -109,8 +109,9 @@ final class CronDiagnostics {
         if ( false === $event ) {
             $latest = $this->sessions->load($session['id']);
             if ( ! is_array($latest) || 'completed' !== ($latest['data']['status'] ?? null) ) {
-                $this->markScheduleError($latest ?? $session, 'scheduled_event_not_observable');
-
+                // The public scheduling call succeeded, but absence on immediate reread is
+                // ambiguous: the event may have been claimed/executed concurrently. Keep the
+                // stored state pending and let qualificationFromSession() surface UNKNOWN.
                 return [
                     'started'       => false,
                     'reason'        => 'scheduled_event_not_observable',
@@ -129,10 +130,6 @@ final class CronDiagnostics {
     public function observeProbe(string $sessionId): void {
         $session = $this->sessions->load($sessionId);
         if ( ! is_array($session) || self::SESSION_TYPE !== $session['type'] ) {
-            return;
-        }
-
-        if ( 'completed' === ($session['data']['status'] ?? null) ) {
             return;
         }
 
@@ -260,7 +257,7 @@ final class CronDiagnostics {
     }
 
     private function configuration(): array {
-        $disabled = defined('DISABLE_WP_CRON') && DISABLE_WP_CRON;
+        $disabled  = defined('DISABLE_WP_CRON') && DISABLE_WP_CRON;
         $alternate = defined('ALTERNATE_WP_CRON') && ALTERNATE_WP_CRON;
 
         $mode = 'standard';
@@ -290,9 +287,9 @@ final class CronDiagnostics {
             ];
         }
 
-        $ready = wp_get_ready_cron_jobs();
+        $ready  = wp_get_ready_cron_jobs();
         $events = [];
-        $count = 0;
+        $count  = 0;
 
         foreach ( $ready as $timestamp => $hooks ) {
             foreach ( (array) $hooks as $hook => $instances ) {
