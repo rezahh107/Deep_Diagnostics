@@ -179,6 +179,13 @@ jobs:
                   5,
                   $entry
               );
+              $forceError = isset($_POST['force_error']) && '1' === sanitize_text_field(wp_unslash($_POST['force_error']));
+              if ($forceError) {
+                  wp_send_json_error([
+                      'payload' => 'SecretResponseBodyBrowserCanary123456789012345',
+                      'modeled' => true,
+                  ], 500);
+              }
               wp_send_json_success([
                   'payload' => 'SecretResponseBodyBrowserCanary123456789012345',
                   'modeled' => true,
@@ -219,7 +226,10 @@ jobs:
                       var refresh = $.ajax({
                           url: window.ajaxurl,
                           method: 'POST',
-                          data: {action: 'wddtf_browser_ci_refresh'}
+                          data: {
+                              action: 'wddtf_browser_ci_refresh',
+                              force_error: mode === 'syncfail' ? '1' : '0'
+                          }
                       });
 
                       if (mode === 'pre') {
@@ -227,6 +237,20 @@ jobs:
                               document.title = 'WDDTF pre-response unrelated mutation';
                               document.getElementById('wddtf-browser-fixture-status').setAttribute('data-pre-response', '1');
                           }, 50);
+                      }
+
+                      if (mode === 'sync') {
+                          refresh.done(function () {
+                              document.title = 'WDDTF synchronous completion update';
+                              document.getElementById('wddtf-browser-fixture-status').setAttribute('data-sync-response', '1');
+                          });
+                      }
+
+                      if (mode === 'syncfail') {
+                          refresh.fail(function () {
+                              document.title = 'WDDTF synchronous error completion update';
+                              document.getElementById('wddtf-browser-fixture-status').setAttribute('data-sync-error', '1');
+                          });
                       }
 
                       if (mode === 'post') {
@@ -257,6 +281,7 @@ jobs:
           (async () => {
             const mode = process.env.MODE || 'post';
             const expectedUi = process.env.EXPECTED_UI || 'none';
+            const expectedOutcome = process.env.EXPECTED_OUTCOME || 'success';
             const expectDuration = process.env.EXPECT_DURATION === '1';
             const disableTiming = process.env.DISABLE_TIMING === '1';
             const browser = await chromium.launch({headless: true});
@@ -343,6 +368,9 @@ jobs:
             if (evidenceRequestSeenAt === null || evidenceRequestSeenAt - clientReceivedMs < 50) {
               throw new Error('client receipt timestamp appears to have been created at delayed evidence-post time');
             }
+            if ((params.get('outcome') || '') !== expectedOutcome) {
+              throw new Error('unexpected completion outcome: ' + params.get('outcome') + ', expected ' + expectedOutcome);
+            }
             if ((params.get('ui_signal') || '') !== expectedUi) {
               throw new Error('unexpected UI signal: ' + params.get('ui_signal') + ', expected ' + expectedUi);
             }
@@ -371,11 +399,17 @@ jobs:
             if (mode === 'pre') {
               await page.waitForFunction(() => document.querySelector('#wddtf-browser-fixture-status')?.getAttribute('data-pre-response') === '1');
             }
+            if (mode === 'sync') {
+              await page.waitForFunction(() => document.querySelector('#wddtf-browser-fixture-status')?.getAttribute('data-sync-response') === '1');
+            }
+            if (mode === 'syncfail') {
+              await page.waitForFunction(() => document.querySelector('#wddtf-browser-fixture-status')?.getAttribute('data-sync-error') === '1');
+            }
             if (mode === 'post') {
               await page.waitForFunction(() => document.querySelector('#wddtf-browser-fixture-status')?.getAttribute('data-updated') === '1');
             }
 
-            console.log(JSON.stringify({mode, sampleRef, expectedUi, clientReceivedMs, evidenceRequestSeenAt}));
+            console.log(JSON.stringify({mode, sampleRef, expectedUi, expectedOutcome, clientReceivedMs, evidenceRequestSeenAt}));
             await browser.close();
           })().catch((error) => {
             console.error(error);
@@ -402,6 +436,7 @@ jobs:
         env:
           MODE: pre
           EXPECTED_UI: none
+          EXPECTED_OUTCOME: success
           EXPECT_DURATION: '1'
           DISABLE_TIMING: '0'
         run: |
@@ -434,6 +469,99 @@ jobs:
             echo "pre-response negative control ok\n";
           '
 
+      - name: Start diagnostic for synchronous completion control
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            delete_transient("wddtf_gravityflow_inbox_observation_current");
+            $result = (new \WDDTF\Diagnostics\Manager())->startGravityDiagnostic();
+            if (empty($result["started"])) { fwrite(STDERR, "diagnostic did not restart for sync completion control\n"); exit(1); }
+            wddtf_browser_ci_seed();
+          '
+
+      - name: Falsify synchronous .done UI mutation in real Chromium
+        working-directory: wordpress
+        env:
+          MODE: sync
+          EXPECTED_UI: both
+          EXPECTED_OUTCOME: success
+          EXPECT_DURATION: '1'
+          DISABLE_TIMING: '0'
+        run: |
+          set -euo pipefail
+          php -S 127.0.0.1:8080 >/tmp/wddtf-browser-sync-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/wp-login.php >/dev/null; then break; fi
+            sleep 1
+          done
+          node /tmp/wddtf-browser-scenario.cjs
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          trap - EXIT
+
+      - name: Verify synchronous success completion UI signal
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $o = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"];
+            if ("TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION" !== ($o["analysis"]["classification"] ?? "")) { fwrite(STDERR, "server classification regressed\n"); exit(1); }
+            if ("BROWSER_UI_SIGNAL_OBSERVED" !== ($o["browser_analysis"]["classification"] ?? "")) { fwrite(STDERR, "synchronous .done UI signal missing\n"); exit(1); }
+            if ("both" !== ($o["samples"][0]["browser"]["ui_signal"] ?? "")) { fwrite(STDERR, "synchronous .done metadata missing\n"); exit(1); }
+            if (!empty($o["browser_analysis"]["entry_visible_to_user_proven"])) { fwrite(STDERR, "sync completion overclaimed user visibility\n"); exit(1); }
+            echo "synchronous .done completion control ok\n";
+          '
+
+      - name: Start diagnostic for synchronous error completion control
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            delete_transient("wddtf_gravityflow_inbox_observation_current");
+            $result = (new \WDDTF\Diagnostics\Manager())->startGravityDiagnostic();
+            if (empty($result["started"])) { fwrite(STDERR, "diagnostic did not restart for sync error control\n"); exit(1); }
+            wddtf_browser_ci_seed();
+          '
+
+      - name: Observe synchronous .fail UI mutation in real Chromium
+        working-directory: wordpress
+        env:
+          MODE: syncfail
+          EXPECTED_UI: both
+          EXPECTED_OUTCOME: error
+          EXPECT_DURATION: '1'
+          DISABLE_TIMING: '0'
+        run: |
+          set -euo pipefail
+          php -S 127.0.0.1:8080 >/tmp/wddtf-browser-syncfail-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/wp-login.php >/dev/null; then break; fi
+            sleep 1
+          done
+          node /tmp/wddtf-browser-scenario.cjs
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          trap - EXIT
+
+      - name: Verify synchronous error completion UI signal
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $o = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"];
+            if ("BROWSER_UI_SIGNAL_OBSERVED" !== ($o["browser_analysis"]["classification"] ?? "")) { fwrite(STDERR, "synchronous .fail UI signal missing\n"); exit(1); }
+            $browser = $o["samples"][0]["browser"] ?? [];
+            if ("error" !== ($browser["outcome"] ?? "") || 500 !== ($browser["http_status"] ?? 0)) { fwrite(STDERR, "error completion metadata mismatch\n"); exit(1); }
+            if ("both" !== ($browser["ui_signal"] ?? "")) { fwrite(STDERR, "synchronous .fail metadata missing\n"); exit(1); }
+            if (!empty($o["browser_analysis"]["entry_visible_to_user_proven"])) { fwrite(STDERR, "sync error completion overclaimed user visibility\n"); exit(1); }
+            echo "synchronous .fail completion control ok\n";
+          '
+
       - name: Start diagnostic for post-response UI positive control
         working-directory: wordpress
         run: |
@@ -450,6 +578,7 @@ jobs:
         env:
           MODE: post
           EXPECTED_UI: both
+          EXPECTED_OUTCOME: success
           EXPECT_DURATION: '1'
           DISABLE_TIMING: '0'
         run: |
@@ -550,6 +679,7 @@ jobs:
         env:
           MODE: notiming
           EXPECTED_UI: none
+          EXPECTED_OUTCOME: success
           EXPECT_DURATION: '0'
           DISABLE_TIMING: '1'
         run: |
