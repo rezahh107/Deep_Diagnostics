@@ -101,28 +101,39 @@ final class CronDiagnosticsTest extends TestCase {
         self::assertStringNotContainsString($canary, $encoded);
     }
 
-    public function test_passive_snapshot_never_schedules_a_probe(): void {
+    public function test_passive_snapshot_never_schedules_or_mutates_state(): void {
         $now = 1000;
         $cron = $this->makeCron($now, 'ds-4444444444444444');
+        $before = $GLOBALS['wddtf_test_transients'];
 
         $snapshot = $cron->snapshot();
 
         self::assertSame('not_started', $snapshot['qualification']['status']);
         self::assertSame([], $GLOBALS['wddtf_test_schedule_calls']);
+        self::assertSame($before, $GLOBALS['wddtf_test_transients']);
     }
 
-    public function test_expired_or_stale_current_session_fails_closed_to_unknown_then_self_heals(): void {
+    public function test_expired_session_reads_remain_unknown_without_mutation_and_explicit_start_recovers(): void {
         $now = 1000;
         $cron = $this->makeCron($now, 'ds-5555555555555555');
         $cron->startQualification();
 
         $now = 1000 + 43201;
+        $before = $GLOBALS['wddtf_test_transients'];
         $first = $cron->currentQualification();
         $second = $cron->currentQualification();
 
         self::assertSame('unknown', $first['status']);
         self::assertSame('expired_or_invalid_session', $first['reason']);
-        self::assertSame('not_started', $second['status']);
+        self::assertSame($first, $second);
+        self::assertSame($before, $GLOBALS['wddtf_test_transients']);
+
+        $GLOBALS['wddtf_test_cron_events'] = [];
+        $GLOBALS['wddtf_test_schedule_calls'] = [];
+        $restarted = $cron->startQualification();
+        self::assertTrue($restarted['started']);
+        self::assertSame('scheduled', $restarted['reason']);
+        self::assertCount(1, $GLOBALS['wddtf_test_schedule_calls']);
     }
 
     public function test_schedule_failure_is_reported_without_success_claim(): void {
