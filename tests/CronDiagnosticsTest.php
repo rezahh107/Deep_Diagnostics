@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use WDDTF\Cron\CronDiagnostics;
@@ -151,6 +152,7 @@ final class CronDiagnosticsTest extends TestCase {
     }
 
     #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_disabled_wp_cron_configuration_is_reported_truthfully(): void {
         define('DISABLE_WP_CRON', true);
         $now = 1000;
@@ -164,6 +166,7 @@ final class CronDiagnosticsTest extends TestCase {
     }
 
     #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_alternate_wp_cron_configuration_is_reported_truthfully(): void {
         define('ALTERNATE_WP_CRON', true);
         $now = 1000;
