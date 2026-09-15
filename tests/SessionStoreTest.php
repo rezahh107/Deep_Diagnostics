@@ -12,6 +12,10 @@ final class SessionStoreTest extends TestCase {
         $GLOBALS['wpdb'] = new wpdb();
     }
 
+    protected function tearDown(): void {
+        unset($GLOBALS['wpdb']);
+    }
+
     public function test_session_lifecycle_is_bounded_privacy_minimized_and_read_only_on_expiry(): void {
         $now = 1000;
         $store = new SessionStore(
@@ -144,7 +148,7 @@ final class SessionStoreTest extends TestCase {
         $result = $store->mutate(
             $session['id'],
             static function(array $locked) use ($lockKey, $replacement): array {
-                // Simulate a replacement owner appearing before the first owner releases.
+                // Simulate a replacement owner appearing before the first owner can commit/release.
                 $GLOBALS['wddtf_test_options'][$lockKey]['value'] = $replacement;
                 ++$locked['data']['count'];
                 return $locked;
@@ -153,8 +157,35 @@ final class SessionStoreTest extends TestCase {
 
         self::assertFalse($result);
         self::assertSame($replacement, get_option($lockKey));
+        self::assertSame(0, $store->load($session['id'])['data']['count']);
         self::assertTrue($store->integrityStatus($session['id'])['uncertain']);
-        self::assertSame('mutation_lock_release_failed', $store->integrityStatus($session['id'])['reason']);
+        self::assertSame('mutation_lock_lost', $store->integrityStatus($session['id'])['reason']);
+    }
+
+    public function test_expired_lock_lease_is_revalidated_before_session_commit(): void {
+        $now = 1000;
+        $store = new SessionStore(
+            static function() use (&$now): int { return $now; },
+            static fn(): string => 'ds-6666666666666666',
+            static fn(): string => 'lk-666666666666666666666666',
+            static function(int $microseconds): void {}
+        );
+        $session = $store->create('gravityflow_inbox_observation', ['count' => 0], 900);
+        self::assertNotNull($session);
+
+        $result = $store->mutate(
+            $session['id'],
+            static function(array $locked) use (&$now): array {
+                ++$locked['data']['count'];
+                $now = 1031; // Beyond the 30-second ownership lease.
+                return $locked;
+            }
+        );
+
+        self::assertFalse($result);
+        self::assertSame(0, $store->load($session['id'])['data']['count']);
+        self::assertSame('mutation_lock_lost', $store->integrityStatus($session['id'])['reason']);
+        self::assertFalse(get_option($this->lockKey($session['id']), false));
     }
 
     public function test_stale_lock_recovery_is_owner_safe_and_bounded(): void {
