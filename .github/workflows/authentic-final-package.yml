@@ -1,0 +1,34 @@
+name: Package exact authentic qualification candidate
+
+on:
+  push:
+    branches:
+      - qualify/authentic-gravity-runtime-final
+    paths:
+      - '.github/workflows/authentic-final-package.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: qualify/authentic-gravity-runtime-final
+          fetch-depth: 1
+      - name: Build deterministic DEEP artifact
+        run: |
+          set -euo pipefail
+          python3 create_fixed_plugin.py
+          mkdir -p qualification-package
+          cp dist/wp-deep-diagnostics.zip qualification-package/
+          sha256sum dist/wp-deep-diagnostics.zip > qualification-package/SHA256SUMS
+          git rev-parse HEAD > qualification-package/COMMIT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: authentic-final-deep-package
+          path: qualification-package
+          if-no-files-found: error
+          retention-days: 1
