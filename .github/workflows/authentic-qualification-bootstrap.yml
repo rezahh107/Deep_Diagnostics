@@ -1,18 +1,16 @@
-name: Authentic qualification bootstrap
+name: Authentic qualification package bridge
 
 on:
   push:
     branches:
       - qualify/authentic-gravity-runtime
-    paths:
-      - '.github/workflows/authentic-qualification-bootstrap.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  bootstrap:
+  package:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -23,45 +21,14 @@ jobs:
         run: |
           set -euo pipefail
           python3 create_fixed_plugin.py
-          mkdir -p qualification-bootstrap/deep qualification-bootstrap/runtime
-          cp dist/wp-deep-diagnostics.zip qualification-bootstrap/deep/
-          sha256sum dist/wp-deep-diagnostics.zip > qualification-bootstrap/deep/SHA256SUMS
-          git rev-parse HEAD > qualification-bootstrap/deep/COMMIT
-
-      - name: Download open-source qualification runtime
-        run: |
-          set -euo pipefail
-          cd qualification-bootstrap/runtime
-          curl -fL --retry 3 -o php-8.1.34-cli-linux-x86_64.tar.gz \
-            https://github.com/heera/php-binaries/releases/download/php-8.1/php-8.1.34-cli-linux-x86_64.tar.gz
-          curl -fL --retry 3 -o mariadb-10.11.19-linux-systemd-x86_64.tar.gz \
-            https://downloads.mariadb.org/rest-api/mariadb/10.11.19/mariadb-10.11.19-linux-systemd-x86_64.tar.gz
-          curl -fL --retry 3 -o wordpress-6.5.tar.gz \
-            https://wordpress.org/wordpress-6.5.tar.gz
-          curl -fL --retry 3 -o wordpress-latest.tar.gz \
-            https://wordpress.org/latest.tar.gz
-          curl -fL --retry 3 -o wp-cli.phar \
-            https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
-          chmod +x wp-cli.phar
-          sha256sum php-8.1.34-cli-linux-x86_64.tar.gz \
-                    mariadb-10.11.19-linux-systemd-x86_64.tar.gz \
-                    wordpress-6.5.tar.gz wordpress-latest.tar.gz wp-cli.phar > SHA256SUMS
-
-      - name: Verify PHP bootstrap capabilities
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/php81
-          tar -xzf qualification-bootstrap/runtime/php-8.1.34-cli-linux-x86_64.tar.gz -C /tmp/php81
-          PHP_BIN="$(find /tmp/php81 -type f -name php -perm -111 | head -1)"
-          "$PHP_BIN" -v
-          "$PHP_BIN" -m | grep -qx mysqli
-          "$PHP_BIN" -m | grep -qx mbstring
-          "$PHP_BIN" -m | grep -qx curl
-          "$PHP_BIN" -m | grep -qx dom
+          mkdir -p qualification-package
+          cp dist/wp-deep-diagnostics.zip qualification-package/
+          sha256sum dist/wp-deep-diagnostics.zip > qualification-package/SHA256SUMS
+          git rev-parse HEAD > qualification-package/COMMIT
 
       - uses: actions/upload-artifact@v4
         with:
-          name: authentic-qualification-bootstrap
-          path: qualification-bootstrap
+          name: authentic-qualification-package
+          path: qualification-package
           if-no-files-found: error
           retention-days: 1
