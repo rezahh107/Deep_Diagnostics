@@ -14,6 +14,7 @@ final class CronDiagnosticsTest extends TestCase {
         $GLOBALS['wddtf_test_ready_cron_jobs'] = [];
         $GLOBALS['wddtf_test_schedule_calls'] = [];
         $GLOBALS['wddtf_test_schedule_result'] = true;
+        $GLOBALS['wddtf_test_hide_scheduled_events'] = false;
     }
 
     public function test_start_schedules_exactly_one_probe_and_prevents_duplicate_pending_probe(): void {
@@ -34,6 +35,22 @@ final class CronDiagnosticsTest extends TestCase {
         self::assertFalse($duplicate['started']);
         self::assertSame('already_pending', $duplicate['reason']);
         self::assertCount(1, $GLOBALS['wddtf_test_schedule_calls']);
+    }
+
+    public function test_successful_schedule_without_observable_event_remains_unknown_not_failed(): void {
+        $now = 1000;
+        $GLOBALS['wddtf_test_hide_scheduled_events'] = true;
+        $cron = $this->makeCron($now, 'ds-1212121212121212');
+
+        $result = $cron->startQualification();
+
+        self::assertFalse($result['started']);
+        self::assertSame('scheduled_event_not_observable', $result['reason']);
+        self::assertSame('unknown', $result['qualification']['status']);
+        self::assertSame('pending_event_not_observable', $result['qualification']['reason']);
+        self::assertTrue($result['qualification']['scheduled']);
+        self::assertFalse($result['qualification']['evidence']['execution_observed']);
+        self::assertTrue($result['qualification']['unknowns']['pending_event_missing']);
     }
 
     public function test_probe_observation_records_correlated_timestamp_and_measured_delay(): void {
@@ -133,6 +150,19 @@ final class CronDiagnosticsTest extends TestCase {
         self::assertTrue($configuration['wp_cron_disabled']);
         self::assertFalse($configuration['automatic_wp_cron_enabled']);
         self::assertSame('disabled_by_constant', $configuration['mode']);
+    }
+
+    #[RunInSeparateProcess]
+    public function test_alternate_wp_cron_configuration_is_reported_truthfully(): void {
+        define('ALTERNATE_WP_CRON', true);
+        $now = 1000;
+        $cron = $this->makeCron($now, 'ds-7878787878787878');
+
+        $configuration = $cron->snapshot()['configuration'];
+
+        self::assertTrue($configuration['alternate_wp_cron']);
+        self::assertTrue($configuration['automatic_wp_cron_enabled']);
+        self::assertSame('alternate', $configuration['mode']);
     }
 
     private function makeCron(int &$now, string $id): CronDiagnostics {
