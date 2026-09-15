@@ -255,12 +255,11 @@ final class GravityDiagnostics {
         $gravityFormsVersion = null;
         if ( class_exists('GFForms', false) ) {
             $publicVariables = get_class_vars('GFForms');
-            $candidate = $publicVariables['version'] ?? null;
-            $gravityFormsVersion = is_scalar($candidate) ? (string) $candidate : null;
+            $gravityFormsVersion = $this->versionLabel($publicVariables['version'] ?? null);
         }
 
-        $gravityFlowVersion = defined('GRAVITY_FLOW_VERSION') && is_scalar(constant('GRAVITY_FLOW_VERSION'))
-            ? (string) constant('GRAVITY_FLOW_VERSION')
+        $gravityFlowVersion = defined('GRAVITY_FLOW_VERSION')
+            ? $this->versionLabel(constant('GRAVITY_FLOW_VERSION'))
             : null;
         $gravityFlowAvailable = null !== $gravityFlowVersion
             || class_exists('Gravity_Flow', false)
@@ -280,6 +279,19 @@ final class GravityDiagnostics {
                 'loaded_hook_count'    => $gravityFlowHookCount,
             ],
         ];
+    }
+
+    private function versionLabel(mixed $value): ?string {
+        if ( ! is_scalar($value) ) {
+            return null;
+        }
+
+        $version = trim((string) $value);
+        if ( '' === $version ) {
+            return null;
+        }
+
+        return 'v' . ltrim($version, 'vV');
     }
 
     private function requestSample(int $now): array {
