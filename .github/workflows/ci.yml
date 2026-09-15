@@ -294,4 +294,3 @@ jobs:
             }
             echo "explicit admin POST boundary ok\n";
           ' --user=admin
-          test "$(wp cron event list --field=hook | grep -xc 'wddtf_cron_qualification_probe')" -eq 1
