@@ -4,6 +4,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 use WDDTF\Cron\CronDiagnostics;
 use WDDTF\Diagnostics\DiagnosticsAnalyzer;
+use WDDTF\Diagnostics\Manager;
 use WDDTF\Diagnostics\Report_Builder;
 use WDDTF\Diagnostics\SessionStore;
 use WDDTF\Logging\File_Logger;
@@ -16,6 +17,7 @@ final class CronReportTest extends TestCase {
         $GLOBALS['wddtf_test_ready_cron_jobs'] = [];
         $GLOBALS['wddtf_test_schedule_calls'] = [];
         $GLOBALS['wddtf_test_schedule_result'] = true;
+        $GLOBALS['wddtf_test_hide_scheduled_events'] = false;
     }
 
     public function test_cron_section_is_additive_privacy_safe_and_available_to_all_report_outputs(): void {
@@ -75,5 +77,32 @@ final class CronReportTest extends TestCase {
             self::assertStringNotContainsString($canary, $output);
             self::assertStringNotContainsString('alice.canary@example.test', $output);
         }
+    }
+
+    public function test_live_admin_cron_snapshot_is_minimized_by_existing_redactor(): void {
+        $now = 1000;
+        $hookCanary = 'token=SecretLiveHookCanary123456789012345';
+        $GLOBALS['wddtf_test_ready_cron_jobs'] = [
+            999 => [
+                $hookCanary => [
+                    'signature' => [
+                        'schedule' => false,
+                        'args' => [],
+                    ],
+                ],
+            ],
+        ];
+
+        $clock = static function() use (&$now): int { return $now; };
+        $cron = new CronDiagnostics(
+            new SessionStore($clock, static fn(): string => 'ds-abababababababab'),
+            $clock
+        );
+
+        $live = (new Manager($cron))->getCronDiagnostics();
+        $encoded = (string) wp_json_encode($live);
+
+        self::assertStringNotContainsString('SecretLiveHookCanary123456789012345', $encoded);
+        self::assertStringContainsString('token=[redacted]', $encoded);
     }
 }
