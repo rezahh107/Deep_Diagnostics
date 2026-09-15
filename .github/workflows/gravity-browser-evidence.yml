@@ -31,7 +31,23 @@ jobs:
           --health-retries=10
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact triggering revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Verify exact checkout identity
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
+            echo "Expected exact Head $EXPECTED_SHA but checked out $actual_sha" >&2
+            exit 1
+          fi
+          echo "Exact checkout verified: $actual_sha"
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -47,7 +63,7 @@ jobs:
         run: composer install --no-interaction --prefer-dist
 
       - name: Focused browser evidence contract
-        run: vendor/bin/phpunit tests/GravityBrowserEvidenceTest.php
+        run: vendor/bin/phpunit tests/GravityBrowserEvidenceTest.php tests/GravityBrowserTimingRepairTest.php
 
       - name: Build generated plugin artifact
         run: python3 create_fixed_plugin.py
@@ -68,6 +84,7 @@ jobs:
           wp core install --url=http://127.0.0.1:8080 --title='Deep Diagnostics browser evidence CI' --admin_user=admin --admin_password='ci-password' --admin_email=admin@example.test --skip-email --quiet
           unzip -q ../dist/wp-deep-diagnostics.zip -d wp-content/plugins
           wp plugin activate wp-deep-diagnostics
+          wp plugin is-active wp-deep-diagnostics
 
       - name: Install CI-only Gravity browser fixture
         working-directory: wordpress
@@ -128,6 +145,8 @@ jobs:
           }
 
           function wddtf_browser_ci_refresh(): void {
+              // Keep the request in flight long enough to falsify ajaxSend-based UI baselines.
+              usleep(300000);
               $entry = wddtf_browser_ci_entry();
               apply_filters(
                   'gravityflow_columns_inbox_table',
@@ -164,26 +183,41 @@ jobs:
               do_action('gravityflow_enqueue_admin_scripts');
               apply_filters('gravityflow_inbox_args', ['fixture' => true]);
               wp_enqueue_script('jquery');
+              $mode = isset($_GET['mode']) ? sanitize_key(wp_unslash($_GET['mode'])) : 'post';
               ?>
               <div class="wrap">
                   <h1>CI-only modeled Gravity Inbox</h1>
-                  <div id="wddtf-browser-fixture-status" data-updated="0">Initial fixture state</div>
+                  <div id="wddtf-browser-fixture-status" data-updated="0">SecretDomContentBrowserCanary123456789012345</div>
               </div>
               <script>
               jQuery(function ($) {
+                  var mode = <?php echo wp_json_encode($mode); ?>;
                   $.ajax({
                       url: window.ajaxurl,
                       method: 'POST',
                       data: {action: 'wddtf_browser_ci_unrelated'}
                   }).always(function () {
-                      $.ajax({
+                      var refresh = $.ajax({
                           url: window.ajaxurl,
                           method: 'POST',
                           data: {action: 'wddtf_browser_ci_refresh'}
-                      }).done(function () {
-                          document.title = 'WDDTF fixture updated';
-                          document.getElementById('wddtf-browser-fixture-status').setAttribute('data-updated', '1');
                       });
+
+                      if (mode === 'pre') {
+                          window.setTimeout(function () {
+                              document.title = 'WDDTF pre-response unrelated mutation';
+                              document.getElementById('wddtf-browser-fixture-status').setAttribute('data-pre-response', '1');
+                          }, 50);
+                      }
+
+                      if (mode === 'post') {
+                          refresh.done(function () {
+                              window.setTimeout(function () {
+                                  document.title = 'WDDTF post-response modeled update';
+                                  document.getElementById('wddtf-browser-fixture-status').setAttribute('data-updated', '1');
+                              }, 25);
+                          });
+                      }
                   });
               });
               </script>
@@ -193,45 +227,19 @@ jobs:
           wp plugin activate wddtf-gravity-browser-fixture
           wp eval '$role = get_role("administrator"); if (!$role) { exit(1); } $role->add_cap("gravityflow_inbox");'
 
-      - name: Start diagnostic and seed modeled server lifecycle
-        working-directory: wordpress
-        run: |
-          set -euo pipefail
-          wp eval '
-            delete_transient("wddtf_gravityflow_inbox_observation_current");
-            $result = (new \\WDDTF\\Diagnostics\\Manager())->startGravityDiagnostic();
-            if (empty($result["started"])) { fwrite(STDERR, "diagnostic did not start\n"); exit(1); }
-            wddtf_browser_ci_seed();
-            $o = (new \\WDDTF\\Diagnostics\\Manager())->getGravityDiagnostics()["inbox_observation"];
-            if (1 !== ($o["trace_count"] ?? 0)) { fwrite(STDERR, "seed trace missing\n"); exit(1); }
-            if ("INBOX_REFRESH_NOT_OBSERVED" !== ($o["analysis"]["classification"] ?? "")) { fwrite(STDERR, "seed server classification mismatch\n"); exit(1); }
-          '
-
       - name: Install Chromium browser automation
         run: |
           set -euo pipefail
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
-
-      - name: Exercise modeled Inbox refresh in real Chromium
-        working-directory: wordpress
-        run: |
-          set -euo pipefail
-          php -S 127.0.0.1:8080 >/tmp/wddtf-browser-server.log 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8080/wp-login.php >/dev/null; then
-              break
-            fi
-            sleep 1
-          done
-
-          cat > /tmp/wddtf-browser-test.cjs <<'JS'
-          const { chromium } = require(process.cwd().replace(/\/wordpress$/, '') + '/node_modules/playwright');
+          cat > /tmp/wddtf-browser-scenario.cjs <<'JS'
+          const { chromium } = require(process.env.GITHUB_WORKSPACE + '/node_modules/playwright');
 
           (async () => {
+            const mode = process.env.MODE || 'post';
+            const expectedUi = process.env.EXPECTED_UI || 'none';
+            const expectDuration = process.env.EXPECT_DURATION === '1';
+            const disableTiming = process.env.DISABLE_TIMING === '1';
             const browser = await chromium.launch({headless: true});
             const page = await browser.newPage();
             const base = 'http://127.0.0.1:8080';
@@ -243,6 +251,32 @@ jobs:
               page.waitForURL(/wp-admin/),
               page.click('#wp-submit')
             ]);
+
+            if (disableTiming) {
+              await page.addInitScript(() => {
+                try {
+                  Object.defineProperty(window.performance, 'now', {
+                    configurable: true,
+                    value: undefined
+                  });
+                } catch (_error) {
+                  try {
+                    Object.defineProperty(Performance.prototype, 'now', {
+                      configurable: true,
+                      value: undefined
+                    });
+                  } catch (_ignored) {}
+                }
+              });
+            }
+
+            let evidenceRequestSeenAt = null;
+            page.on('request', (request) => {
+              const data = request.postData() || '';
+              if (data.includes('action=wddtf_record_gravity_browser_evidence')) {
+                evidenceRequestSeenAt = Date.now();
+              }
+            });
 
             const unrelatedPromise = page.waitForResponse((response) => {
               const data = response.request().postData() || '';
@@ -257,10 +291,13 @@ jobs:
               return data.includes('action=wddtf_record_gravity_browser_evidence');
             });
 
-            await page.goto(base + '/wp-admin/tools.php?page=wddtf-browser-fixture', {waitUntil: 'domcontentloaded'});
+            const fixtureUrl = base + '/wp-admin/tools.php?page=wddtf-browser-fixture&mode=' + encodeURIComponent(mode)
+              + '&url_canary=SecretUrlBrowserCanary123456789012345';
+            await page.goto(fixtureUrl, {waitUntil: 'domcontentloaded'});
 
             const unrelated = await unrelatedPromise;
             const refresh = await refreshPromise;
+            const refreshObservedAt = Date.now();
             const evidence = await evidencePromise;
 
             if (unrelated.headers()['x-wddtf-gravity-sample']) {
@@ -278,12 +315,48 @@ jobs:
               throw new Error('browser evidence endpoint did not accept correlated evidence');
             }
 
-            await page.waitForFunction(() => document.querySelector('#wddtf-browser-fixture-status')?.getAttribute('data-updated') === '1');
-            if ((await page.title()) !== 'WDDTF fixture updated') {
-              throw new Error('modeled UI title signal missing');
+            const postData = evidence.request().postData() || '';
+            const params = new URLSearchParams(postData);
+            const clientReceivedMs = Number(params.get('client_received_ms'));
+            if (!Number.isFinite(clientReceivedMs) || Math.abs(clientReceivedMs - refreshObservedAt) > 150) {
+              throw new Error('client receipt timestamp was not captured at response completion');
+            }
+            if (evidenceRequestSeenAt === null || evidenceRequestSeenAt - clientReceivedMs < 50) {
+              throw new Error('client receipt timestamp appears to have been created at delayed evidence-post time');
+            }
+            if ((params.get('ui_signal') || '') !== expectedUi) {
+              throw new Error('unexpected UI signal: ' + params.get('ui_signal') + ', expected ' + expectedUi);
             }
 
-            console.log('fixture sample ref:', sampleRef);
+            const hasDuration = params.has('duration_ms') && params.get('duration_ms') !== '';
+            if (expectDuration) {
+              const duration = Number(params.get('duration_ms'));
+              if (!hasDuration || !Number.isFinite(duration) || duration < 200 || duration > 5000) {
+                throw new Error('reliable request timing did not produce a bounded duration');
+              }
+            } else if (hasDuration) {
+              throw new Error('duration_ms was fabricated without reliable request-start timing');
+            }
+
+            for (const forbidden of [
+              'SecretDomContentBrowserCanary123456789012345',
+              'SecretUrlBrowserCanary123456789012345',
+              'SecretResponseBodyBrowserCanary123456789012345',
+              'private-browser-person@example.test'
+            ]) {
+              if (postData.includes(forbidden)) {
+                throw new Error('sensitive browser content entered evidence POST: ' + forbidden);
+              }
+            }
+
+            if (mode === 'pre') {
+              await page.waitForFunction(() => document.querySelector('#wddtf-browser-fixture-status')?.getAttribute('data-pre-response') === '1');
+            }
+            if (mode === 'post') {
+              await page.waitForFunction(() => document.querySelector('#wddtf-browser-fixture-status')?.getAttribute('data-updated') === '1');
+            }
+
+            console.log(JSON.stringify({mode, sampleRef, expectedUi, clientReceivedMs, evidenceRequestSeenAt}));
             await browser.close();
           })().catch((error) => {
             console.error(error);
@@ -291,36 +364,106 @@ jobs:
           });
           JS
 
-          node /tmp/wddtf-browser-test.cjs
-
-          kill "$server_pid" 2>/dev/null || true
-          wait "$server_pid" 2>/dev/null || true
-          trap - EXIT
-
-      - name: Verify bounded browser evidence and privacy
+      - name: Start diagnostic for pre-response mutation negative control
         working-directory: wordpress
         run: |
           set -euo pipefail
           wp eval '
-            $o = (new \\WDDTF\\Diagnostics\\Manager())->getGravityDiagnostics()["inbox_observation"];
-            if (1 !== ($o["sample_count_total"] ?? 0) || 1 !== ($o["ajax_sample_count"] ?? 0)) {
-                fwrite(STDERR, "unrelated AJAX entered Inbox samples\n"); exit(1);
-            }
+            delete_transient("wddtf_gravityflow_inbox_observation_current");
+            $result = (new \WDDTF\Diagnostics\Manager())->startGravityDiagnostic();
+            if (empty($result["started"])) { fwrite(STDERR, "diagnostic did not start\n"); exit(1); }
+            wddtf_browser_ci_seed();
+            $o = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"];
+            if (1 !== ($o["trace_count"] ?? 0)) { fwrite(STDERR, "seed trace missing\n"); exit(1); }
+            if ("INBOX_REFRESH_NOT_OBSERVED" !== ($o["analysis"]["classification"] ?? "")) { fwrite(STDERR, "seed server classification mismatch\n"); exit(1); }
+          '
+
+      - name: Falsify pre-response UI mutation in real Chromium
+        working-directory: wordpress
+        env:
+          MODE: pre
+          EXPECTED_UI: none
+          EXPECT_DURATION: '1'
+          DISABLE_TIMING: '0'
+        run: |
+          set -euo pipefail
+          php -S 127.0.0.1:8080 >/tmp/wddtf-browser-pre-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/wp-login.php >/dev/null; then break; fi
+            sleep 1
+          done
+          node /tmp/wddtf-browser-scenario.cjs
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          trap - EXIT
+
+      - name: Verify pre-response mutation remained browser response only
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $o = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"];
+            if ("TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION" !== ($o["analysis"]["classification"] ?? "")) { fwrite(STDERR, "server classification regressed\n"); exit(1); }
+            if ("BROWSER_RESPONSE_RECEIVED" !== ($o["browser_analysis"]["classification"] ?? "")) { fwrite(STDERR, "pre-response mutation was misclassified as post-response UI evidence\n"); exit(1); }
+            $browser = $o["samples"][0]["browser"] ?? [];
+            if ("none" !== ($browser["ui_signal"] ?? "")) { fwrite(STDERR, "pre-response mutation contaminated UI signal\n"); exit(1); }
+            if (!is_numeric($browser["duration_ms"] ?? null) || $browser["duration_ms"] < 200 || $browser["duration_ms"] > 5000) { fwrite(STDERR, "measured duration missing or implausible\n"); exit(1); }
+            if (!empty($o["unknowns"]["client_round_trip_not_measured"])) { fwrite(STDERR, "measured duration remained unknown\n"); exit(1); }
+            if (!empty($o["browser_analysis"]["entry_visible_to_user_proven"])) { fwrite(STDERR, "browser evidence overclaimed entry visibility\n"); exit(1); }
+            echo "pre-response negative control ok\n";
+          '
+
+      - name: Start diagnostic for post-response UI positive control
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            delete_transient("wddtf_gravityflow_inbox_observation_current");
+            $result = (new \WDDTF\Diagnostics\Manager())->startGravityDiagnostic();
+            if (empty($result["started"])) { fwrite(STDERR, "diagnostic did not restart\n"); exit(1); }
+            wddtf_browser_ci_seed();
+          '
+
+      - name: Observe post-response UI signal in real Chromium
+        working-directory: wordpress
+        env:
+          MODE: post
+          EXPECTED_UI: both
+          EXPECT_DURATION: '1'
+          DISABLE_TIMING: '0'
+        run: |
+          set -euo pipefail
+          php -S 127.0.0.1:8080 >/tmp/wddtf-browser-post-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/wp-login.php >/dev/null; then break; fi
+            sleep 1
+          done
+          node /tmp/wddtf-browser-scenario.cjs
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          trap - EXIT
+
+      - name: Verify positive browser evidence privacy and interpretation
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $o = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"];
+            if (1 !== ($o["sample_count_total"] ?? 0) || 1 !== ($o["ajax_sample_count"] ?? 0)) { fwrite(STDERR, "unrelated AJAX entered Inbox samples\n"); exit(1); }
             if (1 !== ($o["browser_evidence_count"] ?? 0)) { fwrite(STDERR, "browser evidence count mismatch\n"); exit(1); }
-            if ("TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION" !== ($o["analysis"]["classification"] ?? "")) {
-                fwrite(STDERR, "server classification regressed\n"); exit(1);
-            }
-            if ("BROWSER_UI_SIGNAL_OBSERVED" !== ($o["browser_analysis"]["classification"] ?? "")) {
-                fwrite(STDERR, "browser UI classification missing\n"); exit(1);
-            }
-            if (!empty($o["browser_analysis"]["entry_visible_to_user_proven"])) {
-                fwrite(STDERR, "browser signal overclaimed user visibility\n"); exit(1);
-            }
+            if ("TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION" !== ($o["analysis"]["classification"] ?? "")) { fwrite(STDERR, "server classification regressed\n"); exit(1); }
+            if ("BROWSER_UI_SIGNAL_OBSERVED" !== ($o["browser_analysis"]["classification"] ?? "")) { fwrite(STDERR, "post-response UI signal missing\n"); exit(1); }
+            if (!empty($o["browser_analysis"]["entry_visible_to_user_proven"])) { fwrite(STDERR, "browser signal overclaimed user visibility\n"); exit(1); }
             $sample = $o["samples"][0] ?? [];
-            if (!preg_match("/^gb-[a-f0-9]{20}$/", (string) ($sample["sample_ref"] ?? ""))) {
-                fwrite(STDERR, "opaque sample ref missing\n"); exit(1);
-            }
-            if (!is_array($sample["browser"] ?? null)) { fwrite(STDERR, "browser sample metadata missing\n"); exit(1); }
+            if (!preg_match("/^gb-[a-f0-9]{20}$/", (string) ($sample["sample_ref"] ?? ""))) { fwrite(STDERR, "opaque sample ref missing\n"); exit(1); }
+            $browser = $sample["browser"] ?? [];
+            if ("both" !== ($browser["ui_signal"] ?? "")) { fwrite(STDERR, "post-response UI metadata missing\n"); exit(1); }
+            if (!is_numeric($browser["duration_ms"] ?? null) || $browser["duration_ms"] < 200 || $browser["duration_ms"] > 5000) { fwrite(STDERR, "positive control duration missing\n"); exit(1); }
+            if (!empty($o["unknowns"]["client_round_trip_not_measured"])) { fwrite(STDERR, "positive control duration marked unknown\n"); exit(1); }
             $encoded = (string) wp_json_encode($o);
             foreach ([
                 "SecretBrowserFieldCanary123456789012345",
@@ -328,19 +471,22 @@ jobs:
                 "SecretInboxRowBrowserCanary123456789012345",
                 "SecretResponseBodyBrowserCanary123456789012345",
                 "UnrelatedBrowserCanary123456789012345",
+                "SecretDomContentBrowserCanary123456789012345",
+                "SecretUrlBrowserCanary123456789012345",
                 "private-browser-person@example.test",
                 "7654321",
                 "8765432",
                 "9876543",
                 "\"entry_id\"",
                 "\"form_id\"",
-                "\"step_id\""
+                "\"step_id\"",
+                "request_body",
+                "response_body",
+                "url_canary"
             ] as $forbidden) {
-                if (false !== strpos($encoded, $forbidden)) {
-                    fwrite(STDERR, "privacy leak in browser evidence: $forbidden\n"); exit(1);
-                }
+                if (false !== strpos($encoded, $forbidden)) { fwrite(STDERR, "privacy leak in browser evidence: $forbidden\n"); exit(1); }
             }
-            echo "bounded browser evidence and privacy ok\n";
+            echo "positive browser evidence and privacy ok\n";
           '
 
       - name: Verify report Markdown and LLM browser contract
@@ -353,20 +499,63 @@ jobs:
             $gravity = $report["layers"]["gravity"]["inbox_observation"] ?? null;
             $llm = $report["llm_bundle"]["gravity"]["inbox_observation"] ?? null;
             if (!is_array($gravity) || !is_array($llm)) { fwrite(STDERR, "browser report contract missing\n"); exit(1); }
-            if (($gravity["browser_analysis"]["classification"] ?? null) !== ($llm["browser_analysis"]["classification"] ?? null)) {
-                fwrite(STDERR, "LLM browser classification mismatch\n"); exit(1);
-            }
-            if ("BROWSER_UI_SIGNAL_OBSERVED" !== ($gravity["browser_analysis"]["classification"] ?? "")) {
-                fwrite(STDERR, "persisted browser analysis missing\n"); exit(1);
-            }
+            if (($gravity["browser_analysis"]["classification"] ?? null) !== ($llm["browser_analysis"]["classification"] ?? null)) { fwrite(STDERR, "LLM browser classification mismatch\n"); exit(1); }
+            if ("BROWSER_UI_SIGNAL_OBSERVED" !== ($gravity["browser_analysis"]["classification"] ?? "")) { fwrite(STDERR, "persisted browser analysis missing\n"); exit(1); }
+            if (!empty($gravity["browser_analysis"]["entry_visible_to_user_proven"])) { fwrite(STDERR, "report overclaimed entry visibility\n"); exit(1); }
             $md = get_transient("wddtf_last_report_md");
             if (!is_string($md) || !is_file($md)) { fwrite(STDERR, "Markdown path missing\n"); exit(1); }
             $markdown = (string) file_get_contents($md);
             foreach (["Browser analysis: BROWSER_UI_SIGNAL_OBSERVED", "Entry visible to user proven: no"] as $required) {
                 if (false === strpos($markdown, $required)) { fwrite(STDERR, "Markdown browser contract missing: $required\n"); exit(1); }
             }
-            foreach (["SecretResponseBodyBrowserCanary123456789012345", "private-browser-person@example.test", "7654321"] as $forbidden) {
+            foreach (["SecretResponseBodyBrowserCanary123456789012345", "SecretDomContentBrowserCanary123456789012345", "SecretUrlBrowserCanary123456789012345", "private-browser-person@example.test", "7654321"] as $forbidden) {
                 if (false !== strpos($markdown, $forbidden)) { fwrite(STDERR, "Markdown browser privacy leak: $forbidden\n"); exit(1); }
             }
             echo "browser report/Markdown/LLM contract ok\n";
+          '
+
+      - name: Start diagnostic for unavailable timing control
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            delete_transient("wddtf_gravityflow_inbox_observation_current");
+            $result = (new \WDDTF\Diagnostics\Manager())->startGravityDiagnostic();
+            if (empty($result["started"])) { fwrite(STDERR, "diagnostic did not restart for no-timing control\n"); exit(1); }
+            wddtf_browser_ci_seed();
+          '
+
+      - name: Exercise tagged refresh without reliable performance timing
+        working-directory: wordpress
+        env:
+          MODE: notiming
+          EXPECTED_UI: none
+          EXPECT_DURATION: '0'
+          DISABLE_TIMING: '1'
+        run: |
+          set -euo pipefail
+          php -S 127.0.0.1:8080 >/tmp/wddtf-browser-notiming-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/wp-login.php >/dev/null; then break; fi
+            sleep 1
+          done
+          node /tmp/wddtf-browser-scenario.cjs
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          trap - EXIT
+
+      - name: Verify missing duration remains unknown
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $o = (new \WDDTF\Diagnostics\Manager())->getGravityDiagnostics()["inbox_observation"];
+            if ("BROWSER_RESPONSE_RECEIVED" !== ($o["browser_analysis"]["classification"] ?? "")) { fwrite(STDERR, "no-timing response receipt missing\n"); exit(1); }
+            $browser = $o["samples"][0]["browser"] ?? [];
+            if (array_key_exists("duration_ms", $browser)) { fwrite(STDERR, "unavailable timing fabricated duration_ms\n"); exit(1); }
+            if (empty($o["unknowns"]["client_round_trip_not_measured"])) { fwrite(STDERR, "missing timing was incorrectly marked measured\n"); exit(1); }
+            if (!empty($o["browser_analysis"]["entry_visible_to_user_proven"])) { fwrite(STDERR, "receipt-only evidence overclaimed entry visibility\n"); exit(1); }
+            echo "missing duration fail-closed control ok\n";
           '
