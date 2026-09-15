@@ -1,4 +1,4 @@
-name: Authentic qualification package bridge
+name: Authentic qualification runtime bridge
 
 on:
   push:
@@ -21,14 +21,22 @@ jobs:
         run: |
           set -euo pipefail
           python3 create_fixed_plugin.py
-          mkdir -p qualification-package
-          cp dist/wp-deep-diagnostics.zip qualification-package/
-          sha256sum dist/wp-deep-diagnostics.zip > qualification-package/SHA256SUMS
-          git rev-parse HEAD > qualification-package/COMMIT
+          mkdir -p qualification-runtime/deep
+          cp dist/wp-deep-diagnostics.zip qualification-runtime/deep/
+          sha256sum dist/wp-deep-diagnostics.zip > qualification-runtime/deep/SHA256SUMS
+          git rev-parse HEAD > qualification-runtime/deep/COMMIT
+
+      - name: Download standalone Playwright Chromium
+        run: |
+          set -euo pipefail
+          npx --yes playwright@1.55.0 install chromium
+          mkdir -p qualification-runtime/browser
+          cp -a "$HOME/.cache/ms-playwright" qualification-runtime/browser/
+          find qualification-runtime/browser/ms-playwright -type f -name chrome -o -name headless_shell
 
       - uses: actions/upload-artifact@v4
         with:
-          name: authentic-qualification-package
-          path: qualification-package
+          name: authentic-qualification-runtime
+          path: qualification-runtime
           if-no-files-found: error
           retention-days: 1
