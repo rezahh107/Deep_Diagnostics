@@ -21,6 +21,7 @@ final class GravityDiagnostics {
     private const TRACE_LIMIT = 10;
     private const TRACE_EVENT_LIMIT = 24;
     private const ASSIGNEE_REF_LIMIT = 20;
+    private const REF_DOMAIN = 'wddtf-gravity-ref:v1';
 
     private SessionStore $sessions;
     private Closure $clock;
@@ -157,13 +158,22 @@ final class GravityDiagnostics {
             return;
         }
 
-        $metadata = [
-            'step_ref'    => $this->opaqueRefForCurrentSession('step', $this->positiveInt($stepId)),
-            'step_type'   => is_object($step) ? $this->stepString($step, 'get_type') : null,
-            'step_status' => $this->safeTechnicalString($status),
-        ];
+        $stepId = $this->positiveInt($stepId);
+        $stepType = is_object($step) ? $this->stepString($step, 'get_type') : null;
+        $stepStatus = $this->safeTechnicalString($status);
 
-        $this->recordTraceEvent($entryId, $this->positiveInt($formId), 'step_started', $metadata);
+        $this->recordTraceEvent(
+            $entryId,
+            $this->positiveInt($formId),
+            'step_started',
+            function(string $sessionId) use ($stepId, $stepType, $stepStatus): array {
+                return [
+                    'step_ref'    => null !== $stepId ? $this->opaqueRef($sessionId, 'step', (string) $stepId) : null,
+                    'step_type'   => $stepType,
+                    'step_status' => $stepStatus,
+                ];
+            }
+        );
     }
 
     public function observeStepAssignees(mixed $assignees, mixed $step): mixed {
@@ -176,13 +186,8 @@ final class GravityDiagnostics {
             return $assignees;
         }
 
-        $session = $this->loadCurrentSession();
-        if ( ! is_array($session) || 'observing' !== ($session['data']['status'] ?? null) ) {
-            return $assignees;
-        }
-
         $types = [];
-        $refs = [];
+        $identities = [];
         foreach ( $assignees as $assignee ) {
             $type = 'unknown';
             $identity = null;
@@ -209,29 +214,41 @@ final class GravityDiagnostics {
             }
 
             $types[$type] = ($types[$type] ?? 0) + 1;
-            if ( null !== $identity && count($refs) < self::ASSIGNEE_REF_LIMIT ) {
-                $refs[] = $this->opaqueRef($session['id'], 'assignee', $identity);
+            if ( null !== $identity && count($identities) < self::ASSIGNEE_REF_LIMIT ) {
+                $identities[] = $identity;
             }
         }
 
         ksort($types);
         $stepId = $this->stepPositiveInt($step, 'get_id');
-        $metadata = [
-            'step_ref'       => null !== $stepId ? $this->opaqueRef($session['id'], 'step', (string) $stepId) : null,
-            'step_type'      => $this->stepString($step, 'get_type'),
-            'step_status'    => $this->stepString($step, 'get_status'),
-            'assignee_count' => count($assignees),
-            'assignee_types' => $types,
-            'assignee_refs'  => array_values(array_unique($refs)),
-            'refs_truncated' => count($assignees) > self::ASSIGNEE_REF_LIMIT,
-        ];
+        $stepType = $this->stepString($step, 'get_type');
+        $stepStatus = $this->stepString($step, 'get_status');
+        $assigneeCount = count($assignees);
+        $refsTruncated = $assigneeCount > self::ASSIGNEE_REF_LIMIT;
 
         $this->recordTraceEvent(
             $entryId,
             $this->stepPositiveInt($step, 'get_form_id'),
             'assignees_observed',
-            $metadata,
-            $session
+            function(string $sessionId) use ($stepId, $stepType, $stepStatus, $assigneeCount, $types, $identities, $refsTruncated): array {
+                $refs = [];
+                foreach ( $identities as $identity ) {
+                    $ref = $this->opaqueRef($sessionId, 'assignee', $identity);
+                    if ( null !== $ref ) {
+                        $refs[] = $ref;
+                    }
+                }
+
+                return [
+                    'step_ref'       => null !== $stepId ? $this->opaqueRef($sessionId, 'step', (string) $stepId) : null,
+                    'step_type'      => $stepType,
+                    'step_status'    => $stepStatus,
+                    'assignee_count' => $assigneeCount,
+                    'assignee_types' => $types,
+                    'assignee_refs'  => array_values(array_unique($refs)),
+                    'refs_truncated' => $refsTruncated,
+                ];
+            }
         );
 
         return $assignees;
@@ -243,14 +260,18 @@ final class GravityDiagnostics {
             return;
         }
 
+        $stepId = $this->positiveInt($stepId);
+        $stepStatus = $this->safeTechnicalString($status);
         $this->recordTraceEvent(
             $entryId,
             $this->positiveInt($formId),
             'step_completed',
-            [
-                'step_ref'    => $this->opaqueRefForCurrentSession('step', $this->positiveInt($stepId)),
-                'step_status' => $this->safeTechnicalString($status),
-            ]
+            function(string $sessionId) use ($stepId, $stepStatus): array {
+                return [
+                    'step_ref'    => null !== $stepId ? $this->opaqueRef($sessionId, 'step', (string) $stepId) : null,
+                    'step_status' => $stepStatus,
+                ];
+            }
         );
     }
 
@@ -260,14 +281,18 @@ final class GravityDiagnostics {
             return;
         }
 
+        $stepId = $this->positiveInt($stepId);
+        $startingStepId = $this->positiveInt($startingStepId);
         $this->recordTraceEvent(
             $entryId,
             $this->arrayPositiveInt($form, 'id'),
             'workflow_processed',
-            [
-                'step_ref'      => $this->opaqueRefForCurrentSession('step', $this->positiveInt($stepId)),
-                'next_step_ref' => $this->opaqueRefForCurrentSession('step', $this->positiveInt($startingStepId)),
-            ]
+            function(string $sessionId) use ($stepId, $startingStepId): array {
+                return [
+                    'step_ref'      => null !== $stepId ? $this->opaqueRef($sessionId, 'step', (string) $stepId) : null,
+                    'next_step_ref' => null !== $startingStepId ? $this->opaqueRef($sessionId, 'step', (string) $startingStepId) : null,
+                ];
+            }
         );
     }
 
@@ -281,6 +306,7 @@ final class GravityDiagnostics {
             $entryId,
             $this->arrayPositiveInt($form, 'id'),
             'workflow_completed',
+            null,
             ['workflow_status' => $this->safeTechnicalString($finalStatus)]
         );
     }
@@ -309,6 +335,10 @@ final class GravityDiagnostics {
         }
 
         $traceRef = $this->traceRef($session['id'], $entryId);
+        if ( null === $traceRef ) {
+            return $value;
+        }
+
         $traces = is_array($session['data']['traces'] ?? null) ? $session['data']['traces'] : [];
         if ( isset($traces[$traceRef]) ) {
             $this->observedSessionId = $session['id'];
@@ -323,33 +353,37 @@ final class GravityDiagnostics {
             return;
         }
 
-        $session = $this->sessions->load($this->observedSessionId);
-        if (
-            ! is_array($session) ||
-            self::SESSION_TYPE !== ($session['type'] ?? null) ||
-            'observing' !== ($session['data']['status'] ?? null)
-        ) {
-            return;
-        }
-
+        $sessionId = $this->observedSessionId;
         $now = ($this->clock)();
-        $samples = is_array($session['data']['samples'] ?? null) ? $session['data']['samples'] : [];
-        $total = max(0, (int) ($session['data']['sample_count_total'] ?? 0)) + 1;
+        $sample = $this->requestSample($now);
 
-        $samples[] = $this->requestSample($now);
-        if ( count($samples) > self::SAMPLE_LIMIT ) {
-            $samples = array_slice($samples, -self::SAMPLE_LIMIT);
-        }
+        $this->sessions->mutate(
+            $sessionId,
+            static function(array $session) use ($sample, $now): array {
+                if (
+                    self::SESSION_TYPE !== ($session['type'] ?? null) ||
+                    'observing' !== ($session['data']['status'] ?? null)
+                ) {
+                    return $session;
+                }
 
-        $session['data']['samples'] = $samples;
-        $session['data']['sample_count_total'] = $total;
-        $session['data']['last_observed_timestamp'] = $now;
+                $samples = is_array($session['data']['samples'] ?? null) ? $session['data']['samples'] : [];
+                $total = max(0, (int) ($session['data']['sample_count_total'] ?? 0)) + 1;
+                $samples[] = $sample;
+                if ( count($samples) > self::SAMPLE_LIMIT ) {
+                    $samples = array_slice($samples, -self::SAMPLE_LIMIT);
+                }
 
-        if ( $total >= self::SAMPLE_LIMIT ) {
-            $session['data']['status'] = 'completed';
-        }
+                $session['data']['samples'] = $samples;
+                $session['data']['sample_count_total'] = $total;
+                $session['data']['last_observed_timestamp'] = $now;
+                if ( $total >= self::SAMPLE_LIMIT ) {
+                    $session['data']['status'] = 'completed';
+                }
 
-        $this->sessions->save($session);
+                return $session;
+            }
+        );
     }
 
     public function snapshot(): array {
@@ -382,8 +416,8 @@ final class GravityDiagnostics {
     }
 
     private function loadCurrentSession(): ?array {
-        $currentId = get_transient(self::CURRENT_SESSION_KEY);
-        if ( ! is_string($currentId) || '' === $currentId ) {
+        $currentId = $this->currentSessionId();
+        if ( null === $currentId ) {
             return null;
         }
 
@@ -395,62 +429,92 @@ final class GravityDiagnostics {
         return $session;
     }
 
+    private function currentSessionId(): ?string {
+        $currentId = get_transient(self::CURRENT_SESSION_KEY);
+        return is_string($currentId) && '' !== $currentId ? $currentId : null;
+    }
+
+    /**
+     * @param null|callable(string):array $metadataFactory
+     */
     private function recordTraceEvent(
         int $entryId,
         ?int $formId,
         string $eventType,
-        array $metadata = [],
-        ?array $loadedSession = null
+        ?callable $metadataFactory = null,
+        array $staticMetadata = []
     ): void {
-        $session = $loadedSession ?? $this->loadCurrentSession();
-        if ( ! is_array($session) || 'observing' !== ($session['data']['status'] ?? null) ) {
+        $sessionId = $this->currentSessionId();
+        if ( null === $sessionId ) {
             return;
         }
 
-        $traceRef = $this->traceRef($session['id'], $entryId);
-        $traces = is_array($session['data']['traces'] ?? null) ? $session['data']['traces'] : [];
-        $order = is_array($session['data']['trace_order'] ?? null) ? array_values($session['data']['trace_order']) : [];
-
-        if ( ! isset($traces[$traceRef]) ) {
-            if ( count($order) >= self::TRACE_LIMIT ) {
-                if ( empty($session['data']['traces_truncated']) ) {
-                    $session['data']['traces_truncated'] = true;
-                    $this->sessions->save($session);
+        $this->sessions->mutate(
+            $sessionId,
+            function(array $session) use ($entryId, $formId, $eventType, $metadataFactory, $staticMetadata): array {
+                if (
+                    self::SESSION_TYPE !== ($session['type'] ?? null) ||
+                    'observing' !== ($session['data']['status'] ?? null)
+                ) {
+                    return $session;
                 }
-                return;
+
+                $traceRef = $this->traceRef($session['id'], $entryId);
+                if ( null === $traceRef ) {
+                    return $session;
+                }
+
+                $traces = is_array($session['data']['traces'] ?? null) ? $session['data']['traces'] : [];
+                $order = is_array($session['data']['trace_order'] ?? null) ? array_values($session['data']['trace_order']) : [];
+
+                if ( ! isset($traces[$traceRef]) ) {
+                    if ( count($order) >= self::TRACE_LIMIT ) {
+                        $session['data']['traces_truncated'] = true;
+                        return $session;
+                    }
+
+                    $formRef = null;
+                    if ( null !== $formId ) {
+                        $formRef = $this->opaqueRef($session['id'], 'form', (string) $formId);
+                    }
+
+                    $traces[$traceRef] = [
+                        'trace_ref'         => $traceRef,
+                        'form_ref'          => $formRef,
+                        'created_timestamp' => ($this->clock)(),
+                        'event_count_total' => 0,
+                        'events_truncated'  => false,
+                        'events'            => [],
+                    ];
+                    $order[] = $traceRef;
+                } elseif ( null === ($traces[$traceRef]['form_ref'] ?? null) && null !== $formId ) {
+                    $traces[$traceRef]['form_ref'] = $this->opaqueRef($session['id'], 'form', (string) $formId);
+                }
+
+                $trace = $traces[$traceRef];
+                $events = is_array($trace['events'] ?? null) ? array_values($trace['events']) : [];
+                $trace['event_count_total'] = max(0, (int) ($trace['event_count_total'] ?? count($events))) + 1;
+
+                if ( count($events) < self::TRACE_EVENT_LIMIT ) {
+                    $metadata = $staticMetadata;
+                    if ( null !== $metadataFactory ) {
+                        $metadata = array_merge($metadata, $metadataFactory($session['id']));
+                    }
+                    $events[] = array_merge(
+                        $this->baseEvent($eventType),
+                        array_filter($metadata, static fn(mixed $value): bool => null !== $value)
+                    );
+                    $trace['events'] = $events;
+                } else {
+                    $trace['events_truncated'] = true;
+                }
+
+                $traces[$traceRef] = $trace;
+                $session['data']['traces'] = $traces;
+                $session['data']['trace_order'] = $order;
+                return $session;
             }
-
-            $traces[$traceRef] = [
-                'trace_ref'         => $traceRef,
-                'form_ref'          => null !== $formId ? $this->opaqueRef($session['id'], 'form', (string) $formId) : null,
-                'created_timestamp' => ($this->clock)(),
-                'event_count_total' => 0,
-                'events_truncated'  => false,
-                'events'            => [],
-            ];
-            $order[] = $traceRef;
-        } elseif ( null === ($traces[$traceRef]['form_ref'] ?? null) && null !== $formId ) {
-            $traces[$traceRef]['form_ref'] = $this->opaqueRef($session['id'], 'form', (string) $formId);
-        }
-
-        $trace = $traces[$traceRef];
-        $events = is_array($trace['events'] ?? null) ? array_values($trace['events']) : [];
-        $trace['event_count_total'] = max(0, (int) ($trace['event_count_total'] ?? count($events))) + 1;
-
-        if ( count($events) < self::TRACE_EVENT_LIMIT ) {
-            $events[] = array_merge(
-                $this->baseEvent($eventType),
-                array_filter($metadata, static fn(mixed $value): bool => null !== $value)
-            );
-            $trace['events'] = $events;
-        } else {
-            $trace['events_truncated'] = true;
-        }
-
-        $traces[$traceRef] = $trace;
-        $session['data']['traces'] = $traces;
-        $session['data']['trace_order'] = $order;
-        $this->sessions->save($session);
+        );
     }
 
     private function observationFromSession(array $session): array {
@@ -469,6 +533,7 @@ final class GravityDiagnostics {
         $lastObserved = is_int($data['last_observed_timestamp'] ?? null)
             ? $data['last_observed_timestamp']
             : null;
+        $integrity = $this->sessions->integrityStatus($session['id']);
 
         $traceMap = is_array($data['traces'] ?? null) ? $data['traces'] : [];
         $traceOrder = is_array($data['trace_order'] ?? null) ? array_values($data['trace_order']) : [];
@@ -478,7 +543,7 @@ final class GravityDiagnostics {
                 continue;
             }
             $trace = $traceMap[$traceRef];
-            $trace['analysis'] = $this->analyzeTrace($trace, $samples, count($traceOrder));
+            $trace['analysis'] = $this->analyzeTrace($trace, $samples, count($traceOrder), $integrity);
             $traces[] = $trace;
         }
 
@@ -504,7 +569,8 @@ final class GravityDiagnostics {
             'trace_count'             => count($traces),
             'traces_truncated'        => ! empty($data['traces_truncated']),
             'traces'                  => $traces,
-            'analysis'                => $this->analyzeSession($traces, ! empty($data['traces_truncated'])),
+            'integrity'               => $integrity,
+            'analysis'                => $this->analyzeSession($traces, ! empty($data['traces_truncated']), $integrity),
             'evidence'                => [
                 'observer_hook'                => self::INBOX_FILTER,
                 'row_observer_hook'            => self::INBOX_FIELD_VALUE_FILTER,
@@ -515,21 +581,30 @@ final class GravityDiagnostics {
                 'raw_form_entry_values_stored' => false,
                 'raw_host_identifiers_stored'  => false,
                 'raw_assignee_identity_stored' => false,
+                'session_integrity_uncertain'  => ! empty($integrity['uncertain']),
             ],
             'unknowns'                => [
                 'client_round_trip_not_measured'         => true,
                 'root_cause_not_inferred'                => true,
                 'expected_assignee_not_configured'       => true,
                 'authentic_host_runtime_not_established' => true,
+                'session_integrity_uncertain'            => ! empty($integrity['uncertain']),
             ],
         ];
     }
 
-    private function analyzeSession(array $traces, bool $truncated): array {
+    private function analyzeSession(array $traces, bool $truncated, array $integrity): array {
         if ( $truncated ) {
             return [
                 'classification' => 'INSUFFICIENT_EVIDENCE',
                 'reason'         => 'candidate_trace_limit_reached',
+            ];
+        }
+
+        if ( ! empty($integrity['uncertain']) ) {
+            return [
+                'classification' => 'INSUFFICIENT_EVIDENCE',
+                'reason'         => 'session_integrity_uncertain',
             ];
         }
 
@@ -550,7 +625,7 @@ final class GravityDiagnostics {
         ];
     }
 
-    private function analyzeTrace(array $trace, array $samples, int $sessionTraceCount): array {
+    private function analyzeTrace(array $trace, array $samples, int $sessionTraceCount, array $integrity): array {
         $events = is_array($trace['events'] ?? null) ? $trace['events'] : [];
         $types = [];
         $positiveAssignees = false;
@@ -589,8 +664,20 @@ final class GravityDiagnostics {
             'server_inbox_linked'          => $linkedInbox,
             'ajax_inbox_linked'            => $linkedAjaxInbox,
         ];
+        $eventsTruncated = ! empty($trace['events_truncated']);
+        $positiveServerChain = $proven['entry_created']
+            && $proven['submission_completed']
+            && $proven['step_started']
+            && $proven['positive_assignee_count']
+            && $proven['server_inbox_linked'];
 
-        if ( ! $proven['entry_created'] ) {
+        if ( ! empty($integrity['uncertain']) ) {
+            $classification = 'INSUFFICIENT_EVIDENCE';
+            $reason = 'session_integrity_uncertain';
+        } elseif ( $eventsTruncated && ! $positiveServerChain ) {
+            $classification = 'INSUFFICIENT_EVIDENCE';
+            $reason = 'trace_event_limit_reached';
+        } elseif ( ! $proven['entry_created'] ) {
             $classification = 'ENTRY_NOT_OBSERVED';
             $reason = 'entry_created_hook_not_observed';
         } elseif ( ! $proven['submission_completed'] ) {
@@ -628,12 +715,16 @@ final class GravityDiagnostics {
         return [
             'classification' => $classification,
             'reason'         => $reason,
+            'complete_history' => ! $eventsTruncated,
+            'events_truncated' => $eventsTruncated,
             'proven'         => $proven,
             'unknowns'       => [
                 'root_cause_not_inferred'        => true,
                 'expected_assignee_not_compared' => true,
                 'browser_refresh_not_measured'   => true,
                 'client_network_not_measured'    => true,
+                'trace_history_incomplete'       => $eventsTruncated,
+                'session_integrity_uncertain'    => ! empty($integrity['uncertain']),
             ],
         ];
     }
@@ -739,31 +830,39 @@ final class GravityDiagnostics {
         return 'frontend';
     }
 
-    private function traceRef(string $sessionId, int $entryId): string {
+    private function traceRef(string $sessionId, int $entryId): ?string {
         return $this->opaqueRef($sessionId, 'entry', (string) $entryId, 'gt');
     }
 
-    private function opaqueRefForCurrentSession(string $kind, ?int $value): ?string {
-        if ( null === $value ) {
-            return null;
-        }
-        $session = $this->loadCurrentSession();
-        if ( ! is_array($session) ) {
+    private function opaqueRef(string $sessionId, string $kind, string $value, ?string $prefix = null): ?string {
+        $secret = $this->correlationSecret();
+        if ( null === $secret ) {
+            $this->sessions->markIntegrityUncertain($sessionId, 'pseudonym_secret_unavailable');
             return null;
         }
 
-        return $this->opaqueRef($session['id'], $kind, (string) $value);
-    }
-
-    private function opaqueRef(string $sessionId, string $kind, string $value, ?string $prefix = null): string {
         $prefix ??= match ($kind) {
             'form' => 'gf',
             'step' => 'gs',
             'assignee' => 'ga',
             default => 'gx',
         };
+        $message = self::REF_DOMAIN . '|' . $sessionId . '|' . $kind . '|' . $value;
 
-        return $prefix . '-' . substr(hash_hmac('sha256', $kind . ':' . $value, $sessionId), 0, 16);
+        return $prefix . '-' . substr(hash_hmac('sha256', $message, $secret), 0, 16);
+    }
+
+    private function correlationSecret(): ?string {
+        if ( ! function_exists('wp_salt') ) {
+            return null;
+        }
+
+        $secret = wp_salt('auth');
+        if ( ! is_string($secret) || strlen($secret) < 32 ) {
+            return null;
+        }
+
+        return hash_hmac('sha256', 'wddtf-gravity-correlation-key:v1', $secret, true);
     }
 
     private function positiveInt(mixed $value): ?int {
@@ -839,6 +938,11 @@ final class GravityDiagnostics {
             'trace_count'             => 0,
             'traces_truncated'        => false,
             'traces'                  => [],
+            'integrity'               => [
+                'uncertain' => false,
+                'reason'    => null,
+                'marked_at' => null,
+            ],
             'analysis'                => [
                 'classification' => 'ENTRY_NOT_OBSERVED',
                 'reason'         => 'no_candidate_entry_lifecycle_observed',
@@ -853,12 +957,14 @@ final class GravityDiagnostics {
                 'raw_form_entry_values_stored' => false,
                 'raw_host_identifiers_stored'  => false,
                 'raw_assignee_identity_stored' => false,
+                'session_integrity_uncertain'  => false,
             ],
             'unknowns'                => [
                 'client_round_trip_not_measured'         => true,
                 'root_cause_not_inferred'                => true,
                 'expected_assignee_not_configured'       => true,
                 'authentic_host_runtime_not_established' => true,
+                'session_integrity_uncertain'            => false,
             ],
         ];
     }
