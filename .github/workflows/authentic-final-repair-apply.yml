@@ -1,0 +1,120 @@
+name: Apply final authentic runtime repairs
+
+on:
+  push:
+    branches:
+      - qualify/authentic-gravity-runtime-final
+    paths:
+      - '.github/workflows/authentic-final-repair-apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: qualify/authentic-gravity-runtime-final
+          fetch-depth: 2
+
+      - name: Apply bounded authentic-host repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              text = p.read_text()
+              if new in text:
+                  return
+              if old not in text:
+                  raise SystemExit(f'{label}: expected source not found')
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'src/Gravity/GravityDiagnostics.php',
+              """                    if ( 'ajax' !== ($sample['transport'] ?? null) || empty($sample['candidate_trace_refs']) ) {\n                        return $locked;\n                    }\n""",
+              """                    if ( ! in_array($sample['transport'] ?? null, ['ajax', 'rest'], true) || empty($sample['candidate_trace_refs']) ) {\n                        return $locked;\n                    }\n""",
+              'REST sample admission'
+          )
+
+          replace_once(
+              'src/Gravity/GravityDiagnostics.php',
+              """            ! in_array($transport, ['ajax', 'rest'], true) ||\n            ! $this->browserEvidenceAuthorized() ||\n            [] === $this->inboxCandidateTraceRefs\n""",
+              """            ! in_array($transport, ['ajax', 'rest'], true) ||\n            ! $this->browserResponseTagAuthorized($transport) ||\n            [] === $this->inboxCandidateTraceRefs\n""",
+              'REST response auth gate'
+          )
+
+          gravity = Path('src/Gravity/GravityDiagnostics.php')
+          text = gravity.read_text()
+          marker = """    private function browserNonceAction(string $sessionId): string {\n"""
+          method = """    private function browserResponseTagAuthorized(string $transport): bool {\n        if ( $this->browserEvidenceAuthorized() ) {\n            return true;\n        }\n        if (\n            'rest' !== $transport ||\n            ! function_exists('wp_validate_auth_cookie') ||\n            ! function_exists('user_can')\n        ) {\n            return false;\n        }\n\n        $userId = wp_validate_auth_cookie('', 'logged_in');\n        return is_int($userId) && $userId > 0 && user_can($userId, self::BROWSER_CAPABILITY);\n    }\n\n"""
+          if 'private function browserResponseTagAuthorized' not in text:
+              if marker not in text:
+                  raise SystemExit('browser auth insertion marker missing')
+              gravity.write_text(text.replace(marker, method + marker, 1))
+
+          bootstrap = Path('tests/bootstrap.php')
+          text = bootstrap.read_text()
+          globals_marker = """$GLOBALS['wddtf_test_capabilities'] = [];\n$GLOBALS['wddtf_test_enqueued_scripts'] = [];\n"""
+          globals_new = """$GLOBALS['wddtf_test_capabilities'] = [];\n$GLOBALS['wddtf_test_validated_cookie_user'] = false;\n$GLOBALS['wddtf_test_user_capabilities'] = [];\n$GLOBALS['wddtf_test_enqueued_scripts'] = [];\n"""
+          if 'wddtf_test_validated_cookie_user' not in text:
+              if globals_marker not in text:
+                  raise SystemExit('bootstrap globals marker missing')
+              text = text.replace(globals_marker, globals_new, 1)
+
+          fn_marker = """function __(string $text, string $domain = 'default'): string {\n"""
+          functions = """function wp_validate_auth_cookie(string $cookie = '', string $scheme = ''): int|false {\n    $userId = $GLOBALS['wddtf_test_validated_cookie_user'] ?? false;\n    return is_int($userId) && $userId > 0 ? $userId : false;\n}\n\nfunction user_can(mixed $user, string $capability): bool {\n    $userId = is_int($user) ? $user : (is_object($user) && isset($user->ID) ? (int) $user->ID : 0);\n    return true === ($GLOBALS['wddtf_test_user_capabilities'][$userId][$capability] ?? false);\n}\n\n"""
+          if 'function wp_validate_auth_cookie' not in text:
+              if fn_marker not in text:
+                  raise SystemExit('bootstrap function marker missing')
+              text = text.replace(fn_marker, functions + fn_marker, 1)
+          bootstrap.write_text(text)
+
+          test = Path('tests/GravityBrowserEvidenceTest.php')
+          text = test.read_text()
+          insert_marker = """    /**\n     * @runInSeparateProcess\n     * @preserveGlobalState disabled\n     */\n    public function test_unrelated_rest_never_becomes_server_or_browser_evidence(): void {\n"""
+          additional = """    /**\n     * @runInSeparateProcess\n     * @preserveGlobalState disabled\n     */\n    public function test_candidate_linked_rest_refresh_accepts_validated_logged_in_cookie_when_rest_context_has_no_current_user(): void {\n        $now = 1000;\n        $headers = [];\n        $diagnostics = $this->makeDiagnostics($now, $headers);\n        $diagnostics->startDiagnostic();\n        $this->seedPositiveServerChain($diagnostics, 812, 91);\n\n        $GLOBALS['wddtf_test_logged_in'] = false;\n        $GLOBALS['wddtf_test_capabilities']['gravityflow_inbox'] = false;\n        $GLOBALS['wddtf_test_validated_cookie_user'] = 77;\n        $GLOBALS['wddtf_test_user_capabilities'][77]['gravityflow_inbox'] = true;\n\n        define('REST_REQUEST', true);\n        $diagnostics->observeInboxRender([], []);\n        $diagnostics->observeInboxFieldValue('row-value', 91, 5, ['id' => 812, 'form_id' => 91]);\n        $diagnostics->persistObservedInboxRequest();\n\n        self::assertCount(1, $headers);\n        $observation = $diagnostics->currentInboxObservation();\n        self::assertSame('rest', $observation['samples'][0]['transport']);\n        self::assertSame($headers[0][1], $observation['samples'][0]['sample_ref']);\n\n        // Evidence writes retain the normal authenticated Inbox capability + session nonce boundary.\n        $this->authorizeInboxOperator();\n        $response = $this->postBrowserEvidence($diagnostics, $observation['session_id'], $headers[0][1]);\n        self::assertTrue($response->success);\n        self::assertSame(1, $diagnostics->currentInboxObservation()['browser_evidence_count']);\n    }\n\n    /**\n     * @runInSeparateProcess\n     * @preserveGlobalState disabled\n     */\n    public function test_candidate_linked_rest_refresh_without_validated_inbox_cookie_is_not_tagged(): void {\n        $now = 1000;\n        $headers = [];\n        $diagnostics = $this->makeDiagnostics($now, $headers);\n        $diagnostics->startDiagnostic();\n        $this->seedPositiveServerChain($diagnostics, 812, 91);\n        $GLOBALS['wddtf_test_logged_in'] = false;\n        $GLOBALS['wddtf_test_validated_cookie_user'] = false;\n\n        define('REST_REQUEST', true);\n        $diagnostics->observeInboxRender([], []);\n        $diagnostics->observeInboxFieldValue('row-value', 91, 5, ['id' => 812, 'form_id' => 91]);\n        $diagnostics->persistObservedInboxRequest();\n\n        self::assertSame([], $headers);\n        $observation = $diagnostics->currentInboxObservation();\n        self::assertSame('rest', $observation['samples'][0]['transport']);\n        self::assertNull($observation['samples'][0]['sample_ref']);\n        self::assertSame('BROWSER_EVIDENCE_INSUFFICIENT', $observation['browser_analysis']['classification']);\n    }\n\n"""
+          if 'test_candidate_linked_rest_refresh_accepts_validated_logged_in_cookie_when_rest_context_has_no_current_user' not in text:
+              if insert_marker not in text:
+                  raise SystemExit('REST auth test insertion marker missing')
+              text = text.replace(insert_marker, additional + insert_marker, 1)
+              test.write_text(text)
+
+          timing = Path('tests/GravityBrowserTimingRepairTest.php')
+          text = timing.read_text()
+          timing_marker = """    public function test_cron_truncation_markup_has_no_unmatched_wrapper_close(): void {\n"""
+          timing_test = """    public function test_fetch_observer_admits_only_server_tagged_responses_without_content_or_url_inspection(): void {\n        $source = (string) file_get_contents(dirname(__DIR__) . '/assets/gravity-browser-observer.js');\n        $fetchStart = strpos($source, \"if (typeof window.fetch === 'function')\");\n        $prefilter = strpos($source, '$.ajaxPrefilter(function');\n\n        self::assertIsInt($fetchStart);\n        self::assertIsInt($prefilter);\n        $fetchBlock = substr($source, $fetchStart, $prefilter - $fetchStart);\n        self::assertStringContainsString('var nativeFetch = window.fetch.bind(window);', $fetchBlock);\n        self::assertStringContainsString('return nativeFetch.apply(window, arguments).then(function (response)', $fetchBlock);\n        self::assertStringContainsString('response.headers.get(config.headerName)', $fetchBlock);\n        self::assertStringContainsString('scheduleTaggedEvidence(', $fetchBlock);\n        self::assertStringNotContainsString('.url', $fetchBlock);\n        self::assertStringNotContainsString('response.text', $fetchBlock);\n        self::assertStringNotContainsString('response.json', $fetchBlock);\n    }\n\n"""
+          if 'test_fetch_observer_admits_only_server_tagged_responses_without_content_or_url_inspection' not in text:
+              if timing_marker not in text:
+                  raise SystemExit('fetch observer test insertion marker missing')
+              timing.write_text(text.replace(timing_marker, timing_test + timing_marker, 1))
+          PY
+
+          php -l src/Gravity/GravityDiagnostics.php
+          php -l tests/bootstrap.php
+          php -l tests/GravityBrowserEvidenceTest.php
+          php -l tests/GravityBrowserTimingRepairTest.php
+
+      - name: Run focused tests
+        run: |
+          set -euo pipefail
+          composer install --no-interaction --prefer-dist --no-progress
+          vendor/bin/phpunit tests/GravityBrowserEvidenceTest.php tests/GravityBrowserTimingRepairTest.php tests/SystemInspectorTest.php tests/AssetAnalyzerTest.php
+
+      - name: Commit verified repairs
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/Gravity/GravityDiagnostics.php tests/bootstrap.php tests/GravityBrowserEvidenceTest.php tests/GravityBrowserTimingRepairTest.php
+          if git diff --cached --quiet; then
+            echo 'Repairs already present.'
+            exit 0
+          fi
+          git commit -m 'fix: qualify authentic Gravity REST refresh evidence'
+          git push origin HEAD:qualify/authentic-gravity-runtime-final
