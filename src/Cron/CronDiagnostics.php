@@ -35,20 +35,27 @@ final class CronDiagnostics {
 
         if ( is_string($currentId) && '' !== $currentId ) {
             $current = $this->sessions->load($currentId);
-            if ( is_array($current) && 'pending' === ($current['data']['status'] ?? null) ) {
-                return [
-                    'started'       => false,
-                    'reason'        => 'already_pending',
-                    'qualification' => $this->qualificationFromSession($current),
-                ];
-            }
-
             if ( is_array($current) ) {
-                $this->sessions->delete($currentId);
+                $currentQualification = $this->qualificationFromSession($current);
+                if (
+                    'pending' === ($current['data']['status'] ?? null) &&
+                    'pending' === ($currentQualification['status'] ?? null)
+                ) {
+                    return [
+                        'started'       => false,
+                        'reason'        => 'already_pending',
+                        'qualification' => $currentQualification,
+                    ];
+                }
             }
-        }
 
-        delete_transient(self::CURRENT_SESSION_KEY);
+            // Cleanup is an explicit side effect of the operator-triggered action only.
+            $this->sessions->delete($currentId);
+            delete_transient(self::CURRENT_SESSION_KEY);
+        } elseif ( false !== $currentId ) {
+            // Malformed pointers are left untouched by passive reads and repaired only here.
+            delete_transient(self::CURRENT_SESSION_KEY);
+        }
 
         $now = ($this->clock)();
         $session = $this->sessions->create(
@@ -109,9 +116,8 @@ final class CronDiagnostics {
         if ( false === $event ) {
             $latest = $this->sessions->load($session['id']);
             if ( ! is_array($latest) || 'completed' !== ($latest['data']['status'] ?? null) ) {
-                // The public scheduling call succeeded, but absence on immediate reread is
-                // ambiguous: the event may have been claimed/executed concurrently. Keep the
-                // stored state pending and let qualificationFromSession() surface UNKNOWN.
+                // Scheduling succeeded, but absence on immediate reread is ambiguous: the
+                // event may already have been claimed/executed. Do not invent failure.
                 return [
                     'started'       => false,
                     'reason'        => 'scheduled_event_not_observable',
@@ -171,19 +177,15 @@ final class CronDiagnostics {
         }
 
         if ( ! is_string($currentId) || '' === $currentId ) {
-            delete_transient(self::CURRENT_SESSION_KEY);
             return $this->emptyQualification('unknown', 'invalid_current_session_pointer');
         }
 
         $session = $this->sessions->load($currentId);
         if ( ! is_array($session) ) {
-            delete_transient(self::CURRENT_SESSION_KEY);
             return $this->emptyQualification('unknown', 'expired_or_invalid_session');
         }
 
         if ( self::SESSION_TYPE !== $session['type'] ) {
-            $this->sessions->delete($currentId);
-            delete_transient(self::CURRENT_SESSION_KEY);
             return $this->emptyQualification('unknown', 'unexpected_session_type');
         }
 
@@ -295,7 +297,6 @@ final class CronDiagnostics {
             foreach ( (array) $hooks as $hook => $instances ) {
                 foreach ( (array) $instances as $instance ) {
                     ++$count;
-
                     if ( count($events) >= self::READY_EVENT_LIMIT ) {
                         continue;
                     }
