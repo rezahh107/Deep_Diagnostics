@@ -233,3 +233,37 @@ jobs:
             }
             echo "stale state recovery ok\n";
           '
+      - name: Verify explicit admin POST boundary
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $id = get_transient("wddtf_cron_qualification_current");
+            if (is_string($id) && preg_match("/^ds-[a-f0-9]{16}$/", $id)) {
+                delete_transient("wddtf_diag_session_" . substr(hash("sha256", $id), 0, 32));
+            }
+            delete_transient("wddtf_cron_qualification_current");
+            wp_clear_scheduled_hook(\WDDTF\Cron\CronDiagnostics::PROBE_HOOK);
+          '
+          if wp eval '
+            $_SERVER["REQUEST_METHOD"] = "GET";
+            $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_run_cron_qualification");
+            (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->runCronQualification();
+          ' --user=admin; then
+            echo "GET unexpectedly executed Cron qualification" >&2
+            exit 1
+          fi
+          test "$(wp cron event list --field=hook | grep -xc 'wddtf_cron_qualification_probe' || true)" -eq 0
+          wp eval '
+            $_SERVER["REQUEST_METHOD"] = "POST";
+            $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_run_cron_qualification");
+            (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->runCronQualification();
+          ' --user=admin
+          test "$(wp cron event list --field=hook | grep -xc 'wddtf_cron_qualification_probe')" -eq 1
+          wp eval '
+            $q = (new \WDDTF\Diagnostics\Manager())->getCronDiagnostics()["qualification"];
+            if ("pending" !== ($q["status"] ?? "") || empty($q["scheduled_event_present"])) {
+                fwrite(STDERR, "admin POST did not create the intended pending probe\n"); exit(1);
+            }
+            echo "explicit admin POST boundary ok\n";
+          '
