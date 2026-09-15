@@ -926,7 +926,13 @@ final class GravityDiagnostics {
     }
 
     private function maybeTagBrowserResponse(): void {
-        if ( $this->browserHeaderEmitted || 'ajax' !== $this->requestTransport() || ! $this->browserEvidenceAuthorized() || [] === $this->inboxCandidateTraceRefs ) {
+        $transport = $this->requestTransport();
+        if (
+            $this->browserHeaderEmitted ||
+            ! in_array($transport, ['ajax', 'rest'], true) ||
+            ! $this->browserEvidenceAuthorized() ||
+            [] === $this->inboxCandidateTraceRefs
+        ) {
             return;
         }
         if ( null === $this->browserSampleRef ) {

@@ -152,6 +152,57 @@ final class GravityBrowserEvidenceTest extends TestCase {
         }
     }
 
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function test_candidate_linked_rest_refresh_is_tagged_without_broad_rest_capture(): void {
+        $now = 1000;
+        $headers = [];
+        $diagnostics = $this->makeDiagnostics($now, $headers);
+        $this->authorizeInboxOperator();
+        $diagnostics->startDiagnostic();
+        $this->seedPositiveServerChain($diagnostics, 812, 91);
+
+        define('REST_REQUEST', true);
+        $diagnostics->observeInboxRender([], []);
+        $diagnostics->observeInboxFieldValue('row-value', 91, 5, ['id' => 812, 'form_id' => 91]);
+        $diagnostics->persistObservedInboxRequest();
+
+        self::assertCount(1, $headers);
+        self::assertSame(GravityDiagnostics::BROWSER_SAMPLE_HEADER, $headers[0][0]);
+        self::assertMatchesRegularExpression('/^gb-[a-f0-9]{20}$/', $headers[0][1]);
+
+        $observation = $diagnostics->currentInboxObservation();
+        self::assertSame(1, $observation['sample_count_total']);
+        self::assertSame('rest', $observation['samples'][0]['transport']);
+        self::assertSame($headers[0][1], $observation['samples'][0]['sample_ref']);
+        self::assertCount(1, $observation['samples'][0]['candidate_trace_refs']);
+        self::assertSame('TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION', $observation['analysis']['classification']);
+        self::assertSame('BROWSER_REFRESH_NOT_OBSERVED', $observation['browser_analysis']['classification']);
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function test_unrelated_rest_never_becomes_server_or_browser_evidence(): void {
+        $now = 1000;
+        $headers = [];
+        $diagnostics = $this->makeDiagnostics($now, $headers);
+        $this->authorizeInboxOperator();
+        $diagnostics->startDiagnostic();
+
+        define('REST_REQUEST', true);
+        $diagnostics->persistObservedInboxRequest();
+        $observation = $diagnostics->currentInboxObservation();
+
+        self::assertSame([], $headers);
+        self::assertSame(0, $observation['sample_count_total']);
+        self::assertSame(0, $observation['browser_evidence_count']);
+        self::assertSame('BROWSER_EVIDENCE_INSUFFICIENT', $observation['browser_analysis']['classification']);
+    }
+
     public function test_unrelated_ajax_never_becomes_server_or_browser_evidence(): void {
         $now = 1000;
         $headers = [];
