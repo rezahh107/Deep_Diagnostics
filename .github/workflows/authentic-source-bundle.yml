@@ -1,0 +1,33 @@
+name: Authentic qualification source bundle
+
+on:
+  push:
+    branches:
+      - qualify/authentic-gravity-runtime
+    paths:
+      - '.github/workflows/authentic-source-bundle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Bundle public repository source
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/deep-source
+          git archive --format=tar.gz --output=/tmp/deep-source/deep-source.tar.gz HEAD
+          git rev-parse HEAD > /tmp/deep-source/COMMIT
+          sha256sum /tmp/deep-source/deep-source.tar.gz > /tmp/deep-source/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: authentic-qualification-source
+          path: /tmp/deep-source
+          if-no-files-found: error
+          retention-days: 1
