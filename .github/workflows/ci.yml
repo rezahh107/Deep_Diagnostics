@@ -270,18 +270,28 @@ jobs:
             echo "admin GET rejection boundary ok\n";
           ' --user=admin
           wp eval '
-            if (has_filter("wp_redirect", "WP_CLI\\Utils\\wp_redirect_handler")) {
-                remove_filter("wp_redirect", "WP_CLI\\Utils\\wp_redirect_handler");
-            }
+            add_filter(
+                "wp_redirect",
+                static function(string $location): string {
+                    throw new RuntimeException("redirect intercepted");
+                },
+                PHP_INT_MIN
+            );
             $_SERVER["REQUEST_METHOD"] = "POST";
             $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_run_cron_qualification");
-            (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->runCronQualification();
-          ' --user=admin
-          test "$(wp cron event list --field=hook | grep -xc 'wddtf_cron_qualification_probe')" -eq 1
-          wp eval '
+            $redirected = false;
+            try {
+                (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->runCronQualification();
+            } catch (RuntimeException $exception) {
+                $redirected = "redirect intercepted" === $exception->getMessage();
+            }
+            if (!$redirected) {
+                fwrite(STDERR, "POST action did not reach redirect boundary\n"); exit(1);
+            }
             $q = (new \WDDTF\Diagnostics\Manager())->getCronDiagnostics()["qualification"];
             if ("pending" !== ($q["status"] ?? "") || empty($q["scheduled_event_present"])) {
                 fwrite(STDERR, "admin POST did not create the intended pending probe\n"); exit(1);
             }
             echo "explicit admin POST boundary ok\n";
-          '
+          ' --user=admin
+          test "$(wp cron event list --field=hook | grep -xc 'wddtf_cron_qualification_probe')" -eq 1
