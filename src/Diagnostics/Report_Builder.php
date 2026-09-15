@@ -11,6 +11,8 @@ final class Report_Builder {
     public function toMarkdown(array $report): string {
         $meta = $report['meta'] ?? [];
         $top  = $report['bottlenecks'][0] ?? [];
+        $synthesis = is_array($report['synthesis'] ?? null) ? $report['synthesis'] : [];
+        $synthesisFindings = is_array($synthesis['findings'] ?? null) ? $synthesis['findings'] : [];
         $cron = $report['layers']['cron'] ?? [];
         $qualification = $cron['qualification'] ?? [];
         $ready = $cron['ready_events'] ?? [];
@@ -33,19 +35,35 @@ final class Report_Builder {
             '- ' . __('Context', 'wp-deep-diagnostics') . ': ' . wp_json_encode($meta['context'] ?? []),
             '- ' . __('Top bottleneck', 'wp-deep-diagnostics') . ': ' . ($top['name'] ?? 'n/a'),
             '',
-            '## ' . __('WP-Cron Diagnostics', 'wp-deep-diagnostics'),
-            '- ' . __('Configuration mode', 'wp-deep-diagnostics') . ': ' . ($configuration['mode'] ?? 'unknown'),
-            '- ' . __('Automatic WP-Cron enabled', 'wp-deep-diagnostics') . ': ' . (! empty($configuration['automatic_wp_cron_enabled']) ? 'yes' : 'no'),
-            '- ' . __('Ready events observed', 'wp-deep-diagnostics') . ': ' . (int) ($ready['count'] ?? 0),
-            '- ' . __('Qualification status', 'wp-deep-diagnostics') . ': ' . ($qualification['status'] ?? 'not_started'),
-            '- ' . __('Diagnostic session', 'wp-deep-diagnostics') . ': ' . ($qualification['session_id'] ?? 'n/a'),
-            '- ' . __('Expected execution', 'wp-deep-diagnostics') . ': ' . ($qualification['expected_at'] ?? 'n/a'),
-            '- ' . __('Observed execution', 'wp-deep-diagnostics') . ': ' . ($qualification['observed_at'] ?? 'n/a'),
-            '- ' . __('Measured delay', 'wp-deep-diagnostics') . ': ' . (null !== ($qualification['delay_seconds'] ?? null) ? (string) $qualification['delay_seconds'] . ' s' : 'n/a'),
-            '- ' . __('Evidence', 'wp-deep-diagnostics') . ': ' . wp_json_encode($qualification['evidence'] ?? []),
-            '- ' . __('Unknowns', 'wp-deep-diagnostics') . ': ' . wp_json_encode($qualification['unknowns'] ?? []),
+            '## ' . __('Evidence-first synthesis', 'wp-deep-diagnostics'),
+            '- ' . __('Status', 'wp-deep-diagnostics') . ': ' . ($synthesis['status'] ?? 'insufficient_evidence'),
+            '- ' . __('Result', 'wp-deep-diagnostics') . ': ' . ($synthesis['result'] ?? __('No evidence-first synthesis is available.', 'wp-deep-diagnostics')),
             '',
         ];
+
+        foreach ( $synthesisFindings as $finding ) {
+            $lines[] = '### ' . ($finding['title'] ?? __('Diagnostic finding', 'wp-deep-diagnostics'));
+            $lines[] = '- ' . __('Strength', 'wp-deep-diagnostics') . ': ' . ($finding['strength'] ?? 'unknown');
+            $lines[] = '- ' . __('Plain-language meaning', 'wp-deep-diagnostics') . ': ' . ($finding['meaning'] ?? $finding['result'] ?? '');
+            $lines[] = '- ' . __('Observed facts', 'wp-deep-diagnostics') . ': ' . wp_json_encode($finding['observed_facts'] ?? []);
+            $lines[] = '- ' . __('What DEEP cannot prove', 'wp-deep-diagnostics') . ': ' . ($finding['claim_ceiling'] ?? '');
+            $lines[] = '- ' . __('Recommended next step', 'wp-deep-diagnostics') . ': ' . ($finding['next_step'] ?? '');
+            $lines[] = '- ' . __('Bounded evidence', 'wp-deep-diagnostics') . ': ' . wp_json_encode($finding['evidence'] ?? []);
+            $lines[] = '';
+        }
+
+        $lines[] = '## ' . __('WP-Cron Diagnostics', 'wp-deep-diagnostics');
+        $lines[] = '- ' . __('Configuration mode', 'wp-deep-diagnostics') . ': ' . ($configuration['mode'] ?? 'unknown');
+        $lines[] = '- ' . __('Automatic WP-Cron enabled', 'wp-deep-diagnostics') . ': ' . (! empty($configuration['automatic_wp_cron_enabled']) ? 'yes' : 'no');
+        $lines[] = '- ' . __('Ready events observed', 'wp-deep-diagnostics') . ': ' . (int) ($ready['count'] ?? 0);
+        $lines[] = '- ' . __('Qualification status', 'wp-deep-diagnostics') . ': ' . ($qualification['status'] ?? 'not_started');
+        $lines[] = '- ' . __('Diagnostic session', 'wp-deep-diagnostics') . ': ' . ($qualification['session_id'] ?? 'n/a');
+        $lines[] = '- ' . __('Expected execution', 'wp-deep-diagnostics') . ': ' . ($qualification['expected_at'] ?? 'n/a');
+        $lines[] = '- ' . __('Observed execution', 'wp-deep-diagnostics') . ': ' . ($qualification['observed_at'] ?? 'n/a');
+        $lines[] = '- ' . __('Measured delay', 'wp-deep-diagnostics') . ': ' . (null !== ($qualification['delay_seconds'] ?? null) ? (string) $qualification['delay_seconds'] . ' s' : 'n/a');
+        $lines[] = '- ' . __('Evidence', 'wp-deep-diagnostics') . ': ' . wp_json_encode($qualification['evidence'] ?? []);
+        $lines[] = '- ' . __('Unknowns', 'wp-deep-diagnostics') . ': ' . wp_json_encode($qualification['unknowns'] ?? []);
+        $lines[] = '';
 
         foreach ( array_slice($ready['events'] ?? [], 0, 10) as $event ) {
             $lines[] = '- ' . wp_json_encode(
