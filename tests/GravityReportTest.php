@@ -18,6 +18,11 @@ final class GravityReportTest extends TestCase {
                 'trace_count' => 1,
                 'sample_count_total' => 1,
                 'ajax_sample_count' => 1,
+                'integrity' => [
+                    'uncertain' => false,
+                    'reason' => null,
+                    'marked_at' => null,
+                ],
                 'analysis' => [
                     'classification' => 'TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION',
                     'reason' => 'ajax_inbox_row_link_observed',
@@ -50,6 +55,8 @@ final class GravityReportTest extends TestCase {
                         'analysis' => [
                             'classification' => 'TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION',
                             'reason' => 'ajax_inbox_row_link_observed',
+                            'complete_history' => true,
+                            'events_truncated' => false,
                             'proven' => [
                                 'entry_created' => true,
                                 'submission_completed' => true,
@@ -60,6 +67,8 @@ final class GravityReportTest extends TestCase {
                             'unknowns' => [
                                 'root_cause_not_inferred' => true,
                                 'expected_assignee_not_compared' => true,
+                                'trace_history_incomplete' => false,
+                                'session_integrity_uncertain' => false,
                             ],
                         ],
                     ],
@@ -80,11 +89,13 @@ final class GravityReportTest extends TestCase {
                     'ajax_inbox_render_observed' => true,
                     'raw_form_entry_values_stored' => false,
                     'raw_host_identifiers_stored' => false,
+                    'session_integrity_uncertain' => false,
                 ],
                 'unknowns' => [
                     'client_round_trip_not_measured' => true,
                     'root_cause_not_inferred' => true,
                     'authentic_host_runtime_not_established' => true,
+                    'session_integrity_uncertain' => false,
                 ],
             ],
         ];
@@ -108,7 +119,10 @@ final class GravityReportTest extends TestCase {
         self::assertStringContainsString('Diagnostic session: ds-bbbbbbbbbbbbbbbb', $markdown);
         self::assertStringContainsString('Candidate traces: 1', $markdown);
         self::assertStringContainsString('Session analysis: TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION', $markdown);
+        self::assertStringContainsString('Session integrity uncertainty: no', $markdown);
         self::assertStringContainsString('Gravity causal trace gt-0123456789abcdef', $markdown);
+        self::assertStringContainsString('Complete retained history: yes', $markdown);
+        self::assertStringContainsString('Events truncated: no', $markdown);
         self::assertStringContainsString('"type":"step_started"', $markdown);
         self::assertStringContainsString('"assignee_refs":["ga-0123456789abcdef"]', $markdown);
         self::assertStringNotContainsString('SecretCanary123456789012345', $markdown);
