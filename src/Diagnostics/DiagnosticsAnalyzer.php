@@ -16,7 +16,7 @@ final class DiagnosticsAnalyzer {
         $recommendations = [];
 
         if ( $httpCount > 0 ) {
-            $recommendations[] = __('External HTTP calls detected – likely the main bottleneck when internet is restricted.', 'wp-deep-diagnostics');
+            $recommendations[] = __('HTTP activity was observed. Use measured durations and surrounding timeline evidence before attributing latency to it.', 'wp-deep-diagnostics');
         }
 
         if ( $autoloadSize > 1048576 ) {
@@ -31,7 +31,7 @@ final class DiagnosticsAnalyzer {
         }
 
         if ( empty($recommendations) ) {
-            $recommendations[] = __('No obvious bottleneck detected. Enable SAVEQUERIES and retry.', 'wp-deep-diagnostics');
+            $recommendations[] = __('No strong bottleneck signal detected. Enable SAVEQUERIES when database timing is needed and collect another representative request.', 'wp-deep-diagnostics');
         }
 
         $phases   = [];
@@ -78,6 +78,26 @@ final class DiagnosticsAnalyzer {
             $assetScore = 30;
         }
 
+        $bottlenecks = [
+            [
+                'name'  => __('HTTP Activity', 'wp-deep-diagnostics'),
+                'score' => $httpCount ? 60 : 10,
+            ],
+            [
+                'name'  => __('Autoload Options', 'wp-deep-diagnostics'),
+                'score' => $autoloadScore,
+            ],
+            [
+                'name'  => __('Admin Assets', 'wp-deep-diagnostics'),
+                'score' => $assetScore,
+            ],
+        ];
+
+        usort(
+            $bottlenecks,
+            static fn(array $left, array $right): int => $right['score'] <=> $left['score']
+        );
+
         return [
             'meta'            => $snapshot['meta'],
             'layers'          => [
@@ -92,20 +112,7 @@ final class DiagnosticsAnalyzer {
                 ],
                 'assets'   => $snapshot['assets']['heavy'] ?? [],
             ],
-            'bottlenecks'     => [
-                [
-                    'name'  => __('External HTTP', 'wp-deep-diagnostics'),
-                    'score' => $httpCount ? 92 : 10,
-                ],
-                [
-                    'name'  => __('Autoload Options', 'wp-deep-diagnostics'),
-                    'score' => $autoloadScore,
-                ],
-                [
-                    'name'  => __('Admin Assets', 'wp-deep-diagnostics'),
-                    'score' => $assetScore,
-                ],
-            ],
+            'bottlenecks'     => $bottlenecks,
             'recommendations' => $recommendations,
             'top_offenders'   => [
                 'slowest_phases'  => array_slice($phases, 0, 5),

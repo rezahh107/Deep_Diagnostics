@@ -13,7 +13,14 @@ $upload = wp_upload_dir();
 $dir    = trailingslashit($upload['basedir']) . 'wp-deep-diagnostics/';
 
 if ( is_dir($dir) ) {
-    foreach ( glob($dir . '*') as $file ) {
+    $files = array_merge(glob($dir . '*') ?: [], glob($dir . '.*') ?: []);
+
+    foreach ( $files as $file ) {
+        $basename = basename($file);
+        if ( '.' === $basename || '..' === $basename ) {
+            continue;
+        }
+
         if ( is_file($file) ) {
             @unlink($file);
         }
