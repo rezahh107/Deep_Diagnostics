@@ -49,16 +49,12 @@
         return 'none';
     }
 
-    $(document).on('ajaxSend.wddtfGravityBrowserEvidence', function (_event, xhr) {
-        if (!requests) {
-            return;
+    function observeCompletion(xhr) {
+        var requestState = requests && requests.has(xhr) ? requests.get(xhr) : null;
+        if (requests && requests.has(xhr)) {
+            requests.delete(xhr);
         }
-        requests.set(xhr, {
-            startedAt: performanceNow()
-        });
-    });
 
-    $(document).on('ajaxComplete.wddtfGravityBrowserEvidence', function (_event, xhr) {
         var sampleRef = '';
         try {
             sampleRef = xhr.getResponseHeader(config.headerName) || '';
@@ -70,7 +66,6 @@
             return;
         }
 
-        var requestState = requests && requests.has(xhr) ? requests.get(xhr) : null;
         var finishedAt = performanceNow();
         var duration = requestState && requestState.startedAt !== null && finishedAt !== null
             ? Math.max(0, finishedAt - requestState.startedAt)
@@ -105,5 +100,20 @@
                 dataType: 'json'
             });
         }, Math.max(0, Math.min(500, Number(config.uiObservationWindowMs) || 0)));
+    }
+
+    $.ajaxPrefilter(function (_options, _originalOptions, jqXHR) {
+        jqXHR.always(function () {
+            observeCompletion(jqXHR);
+        });
+    });
+
+    $(document).on('ajaxSend.wddtfGravityBrowserEvidence', function (_event, xhr) {
+        if (!requests) {
+            return;
+        }
+        requests.set(xhr, {
+            startedAt: performanceNow()
+        });
     });
 }(jQuery, window, document));
