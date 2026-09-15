@@ -104,7 +104,7 @@ final class Manager {
     }
 
     public function getCronDiagnostics(): array {
-        return $this->cron->snapshot();
+        return ( new Redactor() )->redact($this->cron->snapshot());
     }
 
     public function finalize(): void {
