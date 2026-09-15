@@ -111,6 +111,7 @@ final class DiagnosticsAnalyzer {
                     'heavy'          => $snapshot['system']['heavy_autoload'] ?? [],
                 ],
                 'assets'   => $snapshot['assets']['heavy'] ?? [],
+                'cron'     => $snapshot['cron'] ?? [],
             ],
             'bottlenecks'     => $bottlenecks,
             'recommendations' => $recommendations,

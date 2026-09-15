@@ -1,1 +1,62 @@
-.wddtf-wrap textarea.code{font-family:monospace;}
+.wddtf-wrap {
+    max-width: 1280px;
+}
+
+.wddtf-wrap .wddtf-card {
+    box-sizing: border-box;
+    margin-block: 16px;
+    padding: 16px;
+    border: 1px solid #c3c4c7;
+    background: #fff;
+}
+
+.wddtf-wrap .wddtf-card > :first-child {
+    margin-block-start: 0;
+}
+
+.wddtf-wrap .wddtf-columns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    align-items: start;
+}
+
+.wddtf-wrap .wddtf-kv-table th {
+    width: 42%;
+}
+
+.wddtf-wrap .wddtf-action-form {
+    margin-block-start: 16px;
+}
+
+.wddtf-wrap .wddtf-table-scroll {
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.wddtf-wrap .wddtf-tech,
+.wddtf-wrap .wddtf-code-output {
+    direction: ltr;
+    unicode-bidi: isolate;
+    font-family: monospace;
+}
+
+.wddtf-wrap .wddtf-tech {
+    overflow-wrap: anywhere;
+}
+
+.wddtf-wrap .wddtf-code-output {
+    text-align: start;
+}
+
+@media screen and (max-width: 782px) {
+    .wddtf-wrap .wddtf-columns {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .wddtf-wrap .wddtf-kv-table th,
+    .wddtf-wrap .wddtf-kv-table td {
+        display: block;
+        width: auto;
+    }
+}

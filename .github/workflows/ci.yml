@@ -31,6 +31,8 @@ jobs:
           find src templates tests -type f -name '*.php' -print0 | xargs -0 -n1 php -l
       - name: Focused privacy regression
         run: vendor/bin/phpunit tests/PrivacyBoundaryTest.php
+      - name: Focused Cron diagnostics regression
+        run: vendor/bin/phpunit tests/SessionStoreTest.php tests/CronDiagnosticsTest.php tests/CronReportTest.php tests/AdminCronActionTest.php
       - name: PHPUnit
         run: composer test
       - name: Deterministic package
@@ -94,14 +96,15 @@ jobs:
         working-directory: wordpress
         run: |
           set -euo pipefail
-          # Activation changes the active-plugin option after WordPress has already booted,
-          # so run one normal command with the plugin active and allow shutdown finalization.
           wp eval 'echo "diagnostic request primed\n";'
           wp eval '
             $report = get_transient("wddtf_last_report");
             if (!is_array($report)) { fwrite(STDERR, "missing report\n"); exit(1); }
             foreach (["meta", "layers", "bottlenecks", "recommendations", "top_offenders", "llm_bundle"] as $key) {
                 if (!array_key_exists($key, $report)) { fwrite(STDERR, "missing key: $key\n"); exit(1); }
+            }
+            if (!isset($report["layers"]["cron"]) || !isset($report["llm_bundle"]["cron"])) {
+                fwrite(STDERR, "missing additive cron report section\n"); exit(1);
             }
             $json = get_transient("wddtf_last_report_json");
             $md = get_transient("wddtf_last_report_md");
@@ -110,3 +113,184 @@ jobs:
             }
             echo "diagnostic lifecycle ok\n";
           '
+      - name: Verify passive admin render is side-effect-free
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $hook = \WDDTF\Cron\CronDiagnostics::PROBE_HOOK;
+            set_transient("wddtf_cron_qualification_current", "malformed-session-pointer", HOUR_IN_SECONDS);
+            if (false !== wp_get_scheduled_event($hook)) {
+                fwrite(STDERR, "unexpected pre-existing probe\n"); exit(1);
+            }
+            ob_start();
+            (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->render();
+            $html = ob_get_clean();
+            if (false !== wp_get_scheduled_event($hook)) {
+                fwrite(STDERR, "admin render scheduled a probe\n"); exit(1);
+            }
+            if ("malformed-session-pointer" !== get_transient("wddtf_cron_qualification_current")) {
+                fwrite(STDERR, "admin render mutated stale diagnostic state\n"); exit(1);
+            }
+            if (false === strpos($html, "WP-Cron Diagnostics")) {
+                fwrite(STDERR, "cron admin section missing\n"); exit(1);
+            }
+            echo "passive admin render ok\n";
+          ' --user=admin
+      - name: Run correlated Cron qualification lifecycle
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $manager = new \WDDTF\Diagnostics\Manager();
+            $result = $manager->startCronQualification();
+            if (empty($result["started"]) || "scheduled" !== ($result["reason"] ?? "")) {
+                fwrite(STDERR, "qualification did not schedule\n"); exit(1);
+            }
+            $q = $result["qualification"];
+            if ("pending" !== ($q["status"] ?? "") || empty($q["scheduled"]) || empty($q["scheduled_event_present"])) {
+                fwrite(STDERR, "qualification not pending with scheduled evidence\n"); exit(1);
+            }
+            if (empty($q["session_id"]) || null !== $q["observed_timestamp"] || !empty($q["evidence"]["execution_observed"])) {
+                fwrite(STDERR, "pending qualification evidence is not truthful\n"); exit(1);
+            }
+            echo "qualification pending: " . $q["session_id"] . "\n";
+          '
+          test "$(wp cron event list --field=hook | grep -xc 'wddtf_cron_qualification_probe')" -eq 1
+          wp eval '
+            $manager = new \WDDTF\Diagnostics\Manager();
+            $duplicate = $manager->startCronQualification();
+            if (!empty($duplicate["started"]) || "already_pending" !== ($duplicate["reason"] ?? "")) {
+                fwrite(STDERR, "duplicate qualification was not prevented\n"); exit(1);
+            }
+          '
+          test "$(wp cron event list --field=hook | grep -xc 'wddtf_cron_qualification_probe')" -eq 1
+          wp cron event run wddtf_cron_qualification_probe
+          wp eval '
+            $q = (new \WDDTF\Diagnostics\Manager())->getCronDiagnostics()["qualification"];
+            if ("completed" !== ($q["status"] ?? "") || empty($q["evidence"]["execution_observed"])) {
+                fwrite(STDERR, "probe callback was not observed\n"); exit(1);
+            }
+            if (!is_int($q["observed_timestamp"]) || !is_int($q["delay_seconds"]) || $q["delay_seconds"] < 0) {
+                fwrite(STDERR, "invalid observed timing evidence\n"); exit(1);
+            }
+            echo "qualification completed with delay=" . $q["delay_seconds"] . "s\n";
+          '
+          wp eval '
+            $report = get_transient("wddtf_last_report");
+            $cron = $report["layers"]["cron"] ?? null;
+            $llmCron = $report["llm_bundle"]["cron"] ?? null;
+            if (!is_array($cron) || !is_array($llmCron)) {
+                fwrite(STDERR, "cron report evidence missing\n"); exit(1);
+            }
+            if ("completed" !== ($cron["qualification"]["status"] ?? "")) {
+                fwrite(STDERR, "persisted cron qualification not completed\n"); exit(1);
+            }
+            if (($cron["qualification"]["session_id"] ?? null) !== ($llmCron["qualification"]["session_id"] ?? null)) {
+                fwrite(STDERR, "correlation id mismatch across report layers\n"); exit(1);
+            }
+            $md = get_transient("wddtf_last_report_md");
+            if (!is_string($md) || !is_file($md) || false === strpos((string) file_get_contents($md), "WP-Cron Diagnostics")) {
+                fwrite(STDERR, "cron markdown section missing\n"); exit(1);
+            }
+            echo "persisted cron report contract ok\n";
+          '
+      - name: Verify disabled, pending and stale Cron states
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp config set DISABLE_WP_CRON true --raw --quiet
+          wp eval '
+            $manager = new \WDDTF\Diagnostics\Manager();
+            $configuration = $manager->getCronDiagnostics()["configuration"];
+            if (empty($configuration["wp_cron_disabled"]) || "disabled_by_constant" !== ($configuration["mode"] ?? "")) {
+                fwrite(STDERR, "disabled Cron configuration not observed\n"); exit(1);
+            }
+            $result = $manager->startCronQualification();
+            if (empty($result["started"]) || "pending" !== ($result["qualification"]["status"] ?? "")) {
+                fwrite(STDERR, "disabled-mode probe did not remain truthfully pending\n"); exit(1);
+            }
+            if (!empty($result["qualification"]["evidence"]["execution_observed"])) {
+                fwrite(STDERR, "pending probe incorrectly claimed execution\n"); exit(1);
+            }
+            echo "disabled pending state ok\n";
+          '
+          wp cron event delete wddtf_cron_qualification_probe --quiet
+          wp eval '
+            $manager = new \WDDTF\Diagnostics\Manager();
+            $pointerBefore = get_transient("wddtf_cron_qualification_current");
+            $first = $manager->getCronDiagnostics()["qualification"];
+            $second = $manager->getCronDiagnostics()["qualification"];
+            if ("unknown" !== ($first["status"] ?? "") || "pending_event_not_observable" !== ($first["reason"] ?? "")) {
+                fwrite(STDERR, "missing scheduled event did not become ambiguous\n"); exit(1);
+            }
+            if ($first !== $second || $pointerBefore !== get_transient("wddtf_cron_qualification_current")) {
+                fwrite(STDERR, "passive stale reads mutated state\n"); exit(1);
+            }
+            $recovered = $manager->startCronQualification();
+            if (empty($recovered["started"]) || "pending" !== ($recovered["qualification"]["status"] ?? "")) {
+                fwrite(STDERR, "explicit qualification did not recover stale state\n"); exit(1);
+            }
+            echo "stale state recovery ok\n";
+          '
+      - name: Verify explicit admin POST boundary
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp eval '
+            $id = get_transient("wddtf_cron_qualification_current");
+            if (is_string($id) && preg_match("/^ds-[a-f0-9]{16}$/", $id)) {
+                delete_transient("wddtf_diag_session_" . substr(hash("sha256", $id), 0, 32));
+            }
+            delete_transient("wddtf_cron_qualification_current");
+            wp_clear_scheduled_hook(\WDDTF\Cron\CronDiagnostics::PROBE_HOOK);
+          '
+          wp eval '
+            add_filter(
+                "wp_die_handler",
+                static fn(): callable => static function(mixed $message): void {
+                    throw new RuntimeException((string) $message);
+                },
+                PHP_INT_MAX
+            );
+            $_SERVER["REQUEST_METHOD"] = "GET";
+            $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_run_cron_qualification");
+            $rejected = false;
+            try {
+                (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->runCronQualification();
+            } catch (RuntimeException $exception) {
+                $rejected = true;
+            }
+            if (!$rejected) {
+                fwrite(STDERR, "GET request was not rejected\n"); exit(1);
+            }
+            if (false !== wp_get_scheduled_event(\WDDTF\Cron\CronDiagnostics::PROBE_HOOK)) {
+                fwrite(STDERR, "GET request created a probe\n"); exit(1);
+            }
+            echo "admin GET rejection boundary ok\n";
+          ' --user=admin
+          wp eval '
+            add_filter(
+                "wp_redirect",
+                static function(string $location): string {
+                    throw new RuntimeException("redirect intercepted");
+                },
+                PHP_INT_MIN
+            );
+            $_SERVER["REQUEST_METHOD"] = "POST";
+            $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_run_cron_qualification");
+            $redirected = false;
+            try {
+                (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->runCronQualification();
+            } catch (RuntimeException $exception) {
+                $redirected = "redirect intercepted" === $exception->getMessage();
+            }
+            if (!$redirected) {
+                fwrite(STDERR, "POST action did not reach redirect boundary\n"); exit(1);
+            }
+            $q = (new \WDDTF\Diagnostics\Manager())->getCronDiagnostics()["qualification"];
+            if ("pending" !== ($q["status"] ?? "") || empty($q["scheduled_event_present"])) {
+                fwrite(STDERR, "admin POST did not create the intended pending probe\n"); exit(1);
+            }
+            echo "explicit admin POST boundary ok\n";
+          ' --user=admin

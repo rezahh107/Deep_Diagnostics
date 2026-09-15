@@ -8,6 +8,7 @@ use WDDTF\Collectors\EventCollector;
 use WDDTF\Collectors\HttpCollector;
 use WDDTF\Collectors\QueryCollector;
 use WDDTF\Collectors\SystemInspector;
+use WDDTF\Cron\CronDiagnostics;
 use WDDTF\Logging\File_Logger;
 use WDDTF\Privacy\Redactor;
 use WDDTF\Support\Env;
@@ -24,7 +25,12 @@ final class Manager {
     private QueryCollector $queries;
     private AssetAnalyzer $assets;
     private SystemInspector $system;
+    private CronDiagnostics $cron;
     private bool $finalized = false;
+
+    public function __construct(?CronDiagnostics $cron = null) {
+        $this->cron = $cron ?? new CronDiagnostics();
+    }
 
     public function boot(): void {
         $this->startedAt     = microtime(true);
@@ -34,6 +40,8 @@ final class Manager {
         $this->queries       = new QueryCollector();
         $this->assets        = new AssetAnalyzer();
         $this->system        = new SystemInspector();
+
+        $this->cron->register();
 
         // Manager boots from the plugin's plugins_loaded callback. Earlier lifecycle hooks
         // cannot be observed truthfully from a normal plugin, so mark our own observation
@@ -91,14 +99,23 @@ final class Manager {
         }
     }
 
+    public function startCronQualification(): array {
+        return $this->cron->startQualification();
+    }
+
+    public function getCronDiagnostics(): array {
+        return ( new Redactor() )->redact($this->cron->snapshot());
+    }
+
     public function finalize(): void {
         if ( $this->finalized ) {
             return;
         }
 
-        // These contexts need explicit session/correlation semantics before reports can be
-        // finalized truthfully. Keep them observable as a documented gap rather than
-        // pretending normal-request reports cover them.
+        // AJAX and REST still need explicit session/correlation semantics before their
+        // per-request reports can be finalized truthfully. Cron callbacks persist only
+        // their bounded correlated qualification evidence and never masquerade as a
+        // normal-request latency report.
         if (
             wp_doing_ajax() ||
             ( defined('REST_REQUEST') && REST_REQUEST ) ||
@@ -124,6 +141,7 @@ final class Manager {
         $queryData = $this->queries->snapshot($wpdb);
         $assetData = $this->assets->snapshot();
         $system    = $this->system->snapshot();
+        $cron      = $this->cron->snapshot();
         $elapsed   = (microtime(true) - $this->startedAt) * 1000;
 
         $snapshot = [
@@ -149,11 +167,12 @@ final class Manager {
             'queries'       => $queryData,
             'assets'        => $assetData,
             'system'        => $system,
+            'cron'          => $cron,
         ];
 
-        // This is the single persisted/reporting privacy boundary. Collectors may retain
-        // short-lived raw diagnostic context in memory; nothing crosses into reports,
-        // transients, Markdown or the LLM bundle until it has been minimized here.
+        // Redactor remains the centralized persisted/reporting privacy authority. Normal
+        // reports cross it here; bounded cross-request diagnostic session data crosses the
+        // same Redactor before SessionStore persists it.
         $snapshot = ( new Redactor() )->redact($snapshot);
 
         $analyzer = new DiagnosticsAnalyzer();
