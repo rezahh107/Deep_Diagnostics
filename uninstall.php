@@ -16,6 +16,12 @@ if ( is_string($currentSession) && 1 === preg_match('/^ds-[a-f0-9]{16}$/', $curr
 delete_transient('wddtf_cron_qualification_current');
 wp_clear_scheduled_hook('wddtf_cron_qualification_probe');
 
+$currentGravitySession = get_transient('wddtf_gravityflow_inbox_observation_current');
+if ( is_string($currentGravitySession) && 1 === preg_match('/^ds-[a-f0-9]{16}$/', $currentGravitySession) ) {
+    delete_transient('wddtf_diag_session_' . substr(hash('sha256', $currentGravitySession), 0, 32));
+}
+delete_transient('wddtf_gravityflow_inbox_observation_current');
+
 $upload = wp_upload_dir();
 $dir    = trailingslashit($upload['basedir']) . 'wp-deep-diagnostics/';
 

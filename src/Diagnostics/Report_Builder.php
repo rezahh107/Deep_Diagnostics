@@ -15,6 +15,11 @@ final class Report_Builder {
         $qualification = $cron['qualification'] ?? [];
         $ready = $cron['ready_events'] ?? [];
         $configuration = $cron['configuration'] ?? [];
+        $gravity = $report['layers']['gravity'] ?? [];
+        $gravityHosts = $gravity['hosts'] ?? [];
+        $gravityForms = $gravityHosts['gravity_forms'] ?? [];
+        $gravityFlow = $gravityHosts['gravity_flow'] ?? [];
+        $inboxObservation = $gravity['inbox_observation'] ?? [];
 
         $lines = [
             '# WP Deep Diagnostics Report',
@@ -41,6 +46,26 @@ final class Report_Builder {
         foreach ( array_slice($ready['events'] ?? [], 0, 10) as $event ) {
             $lines[] = '- ' . wp_json_encode(
                 $event,
+                \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE
+            );
+        }
+
+        $lines[] = '';
+        $lines[] = '## ' . __('Gravity Forms / Gravity Flow Diagnostics', 'wp-deep-diagnostics');
+        $lines[] = '- ' . __('Gravity Forms available', 'wp-deep-diagnostics') . ': ' . (! empty($gravityForms['available']) ? 'yes' : 'no');
+        $lines[] = '- ' . __('Gravity Forms version', 'wp-deep-diagnostics') . ': ' . ($gravityForms['version'] ?? 'n/a');
+        $lines[] = '- ' . __('Gravity Flow available', 'wp-deep-diagnostics') . ': ' . (! empty($gravityFlow['available']) ? 'yes' : 'no');
+        $lines[] = '- ' . __('Gravity Flow version', 'wp-deep-diagnostics') . ': ' . ($gravityFlow['version'] ?? 'n/a');
+        $lines[] = '- ' . __('Inbox observation status', 'wp-deep-diagnostics') . ': ' . ($inboxObservation['status'] ?? 'not_started');
+        $lines[] = '- ' . __('Inbox samples observed', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['sample_count_total'] ?? 0);
+        $lines[] = '- ' . __('AJAX Inbox samples observed', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['ajax_sample_count'] ?? 0);
+        $lines[] = '- ' . __('Inbox observation evidence', 'wp-deep-diagnostics') . ': ' . wp_json_encode($inboxObservation['evidence'] ?? []);
+        $lines[] = '- ' . __('Inbox observation unknowns', 'wp-deep-diagnostics') . ': ' . wp_json_encode($inboxObservation['unknowns'] ?? []);
+        $lines[] = '';
+
+        foreach ( array_slice($inboxObservation['samples'] ?? [], 0, 20) as $sample ) {
+            $lines[] = '- ' . wp_json_encode(
+                $sample,
                 \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE
             );
         }

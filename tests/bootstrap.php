@@ -42,6 +42,9 @@ $GLOBALS['wddtf_test_ready_cron_jobs'] = [];
 $GLOBALS['wddtf_test_schedule_calls'] = [];
 $GLOBALS['wddtf_test_schedule_result'] = true;
 $GLOBALS['wddtf_test_hide_scheduled_events'] = false;
+$GLOBALS['wddtf_test_is_ajax'] = false;
+$GLOBALS['wddtf_test_is_admin'] = false;
+$GLOBALS['wddtf_test_did_actions'] = [];
 
 function add_action(string $hook, callable $callback, int $priority = 10, int $accepted_args = 1): bool {
     $GLOBALS['wddtf_test_actions'][$hook][] = [$callback, $priority, $accepted_args];
@@ -51,6 +54,18 @@ function add_action(string $hook, callable $callback, int $priority = 10, int $a
 function add_filter(string $hook, callable $callback, int $priority = 10, int $accepted_args = 1): bool {
     $GLOBALS['wddtf_test_filters'][$hook][] = [$callback, $priority, $accepted_args];
     return true;
+}
+
+function did_action(string $hook): int {
+    return (int) ($GLOBALS['wddtf_test_did_actions'][$hook] ?? 0);
+}
+
+function wp_doing_ajax(): bool {
+    return true === ($GLOBALS['wddtf_test_is_ajax'] ?? false);
+}
+
+function is_admin(): bool {
+    return true === ($GLOBALS['wddtf_test_is_admin'] ?? false);
 }
 
 function __(string $text, string $domain = 'default'): string {
