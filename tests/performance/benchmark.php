@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/BenchmarkSummary.php';
+require_once __DIR__ . '/CanonicalBaseline.php';
 
 $options = getopt('', [
     'wordpress-dir:',
@@ -82,6 +83,19 @@ function runWp(string $wordpressDir, array $arguments): string {
     }
 
     return $output;
+}
+
+function observeCanonicalBaseline(string $wordpressDir): WddtfPerformanceCanonicalBaseline {
+    $saveQueries = '1' === runWp(
+        $wordpressDir,
+        ['eval', 'echo defined("SAVEQUERIES") && SAVEQUERIES ? "1" : "0";']
+    );
+    $externalHttpBlocked = '1' === runWp(
+        $wordpressDir,
+        ['eval', 'echo defined("WP_HTTP_BLOCK_EXTERNAL") && WP_HTTP_BLOCK_EXTERNAL ? "1" : "0";']
+    );
+
+    return WddtfPerformanceCanonicalBaseline::fromObservedRuntime($saveQueries, $externalHttpBlocked);
 }
 
 function setDeepState(string $wordpressDir, string $state): void {
@@ -257,6 +271,8 @@ function formatMiB(float|int $bytes): string {
 }
 
 try {
+    $canonicalBaseline = observeCanonicalBaseline($wordpressDir);
+
     setDeepState($wordpressDir, 'control');
     loginAdmin($baseUrl, $cookieJar);
 
@@ -337,8 +353,6 @@ try {
     $wordpressVersion = runWp($wordpressDir, ['core', 'version']);
     $pluginVersion = runWp($wordpressDir, ['plugin', 'get', 'wp-deep-diagnostics', '--field=version']);
     $databaseVersion = runWp($wordpressDir, ['eval', 'global $wpdb; echo $wpdb->db_version();']);
-    $saveQueries = '1' === runWp($wordpressDir, ['eval', 'echo defined("SAVEQUERIES") && SAVEQUERIES ? "1" : "0";']);
-    $httpBlocked = '1' === runWp($wordpressDir, ['eval', 'echo defined("WP_HTTP_BLOCK_EXTERNAL") && WP_HTTP_BLOCK_EXTERNAL ? "1" : "0";']);
 
     $scenarioOutput = [];
     foreach ( $scenarios as $scenarioId => $scenario ) {
@@ -367,8 +381,7 @@ try {
             'database_version' => $databaseVersion,
             'server_sapi' => 'cli-server',
             'opcache_enable_cli' => (bool) ini_get('opcache.enable_cli'),
-            'savequeries' => $saveQueries,
-            'external_http_blocked' => $httpBlocked,
+            ...$canonicalBaseline->environmentFields(),
         ],
         'measurement' => [
             'measured_pairs_per_scenario' => $samples,
