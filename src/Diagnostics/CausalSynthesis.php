@@ -32,21 +32,16 @@ final class CausalSynthesis {
         $this->appendLifecycleFinding($snapshot, $elapsedMs, $findings);
         $this->appendRiskFindings($snapshot, $findings);
 
-        $ranked = $findings;
-        usort(
-            $ranked,
-            static fn(array $left, array $right): int => self::strengthRank((string) ($right['strength'] ?? '')) <=> self::strengthRank((string) ($left['strength'] ?? ''))
-        );
-
-        $strongIds = array_values(array_map(
+        $ranked = $this->rankFindings($findings);
+        $strongSignalIds = array_values(array_map(
             static fn(array $finding): string => (string) $finding['id'],
             array_filter($ranked, static fn(array $finding): bool => 'strong_signal' === ($finding['strength'] ?? ''))
         ));
 
-        if ( count($strongIds) > 1 ) {
+        if ( count($strongSignalIds) > 1 ) {
             $status = 'multiple_signals';
             $result = __('Multiple measured signals materially overlap this request. DEEP cannot choose one culprit from the retained evidence.', 'wp-deep-diagnostics');
-        } elseif ( 1 === count($strongIds) ) {
+        } elseif ( 1 === count($strongSignalIds) ) {
             $status = 'strong_signal';
             $result = (string) ($ranked[0]['result'] ?? __('A measured request-local signal materially overlaps the observed latency.', 'wp-deep-diagnostics'));
         } elseif ( $this->hasStrength($ranked, 'observed_boundary') ) {
@@ -75,14 +70,28 @@ final class CausalSynthesis {
                 'next_step'      => __('Reproduce a representative slow request and collect the missing timing evidence for the subsystem you need to discriminate.', 'wp-deep-diagnostics'),
                 'evidence'       => ['elapsed_ms' => round($elapsedMs, 2)],
             ];
+            $ranked = $findings;
+        }
+
+        $strongestFindingIds = [];
+        if ( ! empty($ranked) ) {
+            $topRank = self::strengthRank((string) ($ranked[0]['strength'] ?? ''));
+            if ( $topRank > 0 ) {
+                foreach ( $ranked as $finding ) {
+                    if ( self::strengthRank((string) ($finding['strength'] ?? '')) !== $topRank ) {
+                        break;
+                    }
+                    $strongestFindingIds[] = (string) ($finding['id'] ?? '');
+                }
+            }
         }
 
         return [
             'version'               => 1,
             'status'                => $status,
             'result'                => $result,
-            'strongest_finding_ids' => $strongIds,
-            'findings'              => $findings,
+            'strongest_finding_ids' => $strongestFindingIds,
+            'findings'              => $ranked,
             'unknowns'              => array_values(array_unique($unknowns)),
             'subsystem_context'      => [
                 'cron' => [
@@ -264,11 +273,10 @@ final class CausalSynthesis {
                 'scope'          => 'lifecycle',
                 'strength'       => 'observed_boundary',
                 'title'          => __('First observed slow lifecycle boundary', 'wp-deep-diagnostics'),
-                'result'         => sprintf(__('A %.1f ms interval ended at the %s observation.', 'wp-deep-diagnostics'), $boundaryMs, $layer),
+                'result'         => sprintf(__('A %.1f ms lifecycle interval was observed.', 'wp-deep-diagnostics'), $boundaryMs),
                 'meaning'        => __('This is the first retained lifecycle interval large enough to explain a material part of the request, but DEEP cannot see which work inside the interval consumed the time.', 'wp-deep-diagnostics'),
                 'observed_facts' => [
-                    sprintf(__('Observed interval: %.1f ms.', 'wp-deep-diagnostics'), $boundaryMs),
-                    sprintf(__('End boundary: %s.', 'wp-deep-diagnostics'), $layer),
+                    sprintf(__('Observed lifecycle interval: %.1f ms.', 'wp-deep-diagnostics'), $boundaryMs),
                 ],
                 'claim_ceiling'  => __('The lifecycle boundary localizes the delay between two observations; it does not attribute the delay to the hook at the end of the interval or to any specific callback inside it.', 'wp-deep-diagnostics'),
                 'next_step'      => __('Instrument or profile the code executing between the surrounding lifecycle observations, starting with the owning callbacks in that interval.', 'wp-deep-diagnostics'),
@@ -319,6 +327,15 @@ final class CausalSynthesis {
                 'evidence'       => ['asset_count' => $assetCount],
             ];
         }
+    }
+
+    private function rankFindings(array $findings): array {
+        usort(
+            $findings,
+            static fn(array $left, array $right): int => self::strengthRank((string) ($right['strength'] ?? '')) <=> self::strengthRank((string) ($left['strength'] ?? ''))
+        );
+
+        return $findings;
     }
 
     private function hasStrength(array $findings, string $strength): bool {
