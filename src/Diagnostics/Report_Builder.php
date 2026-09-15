@@ -23,6 +23,7 @@ final class Report_Builder {
         $traces = is_array($inboxObservation['traces'] ?? null) ? $inboxObservation['traces'] : [];
         $gravityAnalysis = $inboxObservation['analysis'] ?? [];
         $gravityIntegrity = $inboxObservation['integrity'] ?? [];
+        $browserAnalysis = $inboxObservation['browser_analysis'] ?? [];
 
         $lines = [
             '# WP Deep Diagnostics Report',
@@ -63,6 +64,10 @@ final class Report_Builder {
         $lines[] = '- ' . __('Diagnostic status', 'wp-deep-diagnostics') . ': ' . ($inboxObservation['status'] ?? 'not_started');
         $lines[] = '- ' . __('Candidate traces', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['trace_count'] ?? 0);
         $lines[] = '- ' . __('Session analysis', 'wp-deep-diagnostics') . ': ' . ($gravityAnalysis['classification'] ?? 'ENTRY_NOT_OBSERVED');
+        $lines[] = '- ' . __('Browser analysis', 'wp-deep-diagnostics') . ': ' . ($browserAnalysis['classification'] ?? 'BROWSER_EVIDENCE_INSUFFICIENT');
+        $lines[] = '- ' . __('Browser analysis reason', 'wp-deep-diagnostics') . ': ' . ($browserAnalysis['reason'] ?? 'unknown');
+        $lines[] = '- ' . __('Browser evidence samples', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['browser_evidence_count'] ?? 0);
+        $lines[] = '- ' . __('Entry visible to user proven', 'wp-deep-diagnostics') . ': ' . (! empty($browserAnalysis['entry_visible_to_user_proven']) ? 'yes' : 'no');
         $lines[] = '- ' . __('Session integrity uncertainty', 'wp-deep-diagnostics') . ': ' . (! empty($gravityIntegrity['uncertain']) ? 'yes' : 'no');
         $lines[] = '- ' . __('Session integrity reason', 'wp-deep-diagnostics') . ': ' . ($gravityIntegrity['reason'] ?? 'n/a');
         $lines[] = '- ' . __('Inbox samples observed', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['sample_count_total'] ?? 0);
