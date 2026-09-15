@@ -13,6 +13,8 @@ if ( ! defined('ABSPATH') ) {
 final class GravityDiagnostics {
     public const INBOX_FILTER = 'gravityflow_columns_inbox_table';
     public const INBOX_FIELD_VALUE_FILTER = 'gravityflow_inbox_field_value';
+    public const BROWSER_EVIDENCE_ACTION = 'wddtf_record_gravity_browser_evidence';
+    public const BROWSER_SAMPLE_HEADER = 'X-WDDTF-Gravity-Sample';
 
     private const CURRENT_SESSION_KEY = 'wddtf_gravityflow_inbox_observation_current';
     private const SESSION_TYPE = 'gravityflow_inbox_observation';
@@ -22,19 +24,28 @@ final class GravityDiagnostics {
     private const TRACE_EVENT_LIMIT = 24;
     private const ASSIGNEE_REF_LIMIT = 20;
     private const REF_DOMAIN = 'wddtf-gravity-ref:v1';
+    private const BROWSER_NONCE_DOMAIN = 'wddtf-gravity-browser:v1';
+    private const BROWSER_CAPABILITY = 'gravityflow_inbox';
+    private const BROWSER_SCRIPT_HANDLE = 'wddtf-gravity-browser-observer';
+    private const BROWSER_UI_WINDOW_MS = 100;
 
     private SessionStore $sessions;
     private Closure $clock;
+    private Closure $headerEmitter;
     private float $requestStartedAt;
     private ?string $observedSessionId = null;
     private int $inboxHookCalls = 0;
     /** @var array<string, true> */
     private array $inboxCandidateTraceRefs = [];
+    private bool $browserEnqueueWindow = false;
+    private ?string $browserSampleRef = null;
+    private bool $browserHeaderEmitted = false;
 
     public function __construct(
         ?SessionStore $sessions = null,
         ?callable $clock = null,
-        ?float $requestStartedAt = null
+        ?float $requestStartedAt = null,
+        ?callable $headerEmitter = null
     ) {
         $this->clock = Closure::fromCallable($clock ?? static fn(): int => time());
         $this->sessions = $sessions ?? new SessionStore($this->clock);
@@ -42,6 +53,15 @@ final class GravityDiagnostics {
             ?? (isset($_SERVER['REQUEST_TIME_FLOAT']) && is_numeric($_SERVER['REQUEST_TIME_FLOAT'])
                 ? (float) $_SERVER['REQUEST_TIME_FLOAT']
                 : microtime(true));
+        $this->headerEmitter = Closure::fromCallable(
+            $headerEmitter ?? static function(string $name, string $value): bool {
+                if ( headers_sent() ) {
+                    return false;
+                }
+                header($name . ': ' . $value);
+                return true;
+            }
+        );
     }
 
     public function register(): void {
@@ -54,6 +74,10 @@ final class GravityDiagnostics {
         add_action('gravityflow_workflow_complete', [$this, 'observeWorkflowComplete'], PHP_INT_MAX, 3);
         add_filter(self::INBOX_FILTER, [$this, 'observeInboxRender'], PHP_INT_MAX, 2);
         add_filter(self::INBOX_FIELD_VALUE_FILTER, [$this, 'observeInboxFieldValue'], PHP_INT_MAX, 4);
+        add_action('gravityflow_enqueue_admin_scripts', [$this, 'markBrowserEnqueueWindow'], PHP_INT_MAX, 0);
+        add_action('gravityflow_enqueue_frontend_scripts', [$this, 'markBrowserEnqueueWindow'], PHP_INT_MAX, 0);
+        add_filter('gravityflow_inbox_args', [$this, 'maybeEnqueueBrowserObserver'], PHP_INT_MAX, 1);
+        add_action('wp_ajax_' . self::BROWSER_EVIDENCE_ACTION, [$this, 'recordBrowserEvidence']);
         add_action('shutdown', [$this, 'persistObservedInboxRequest'], 9998);
     }
 
@@ -311,6 +335,23 @@ final class GravityDiagnostics {
         );
     }
 
+    public function markBrowserEnqueueWindow(): void {
+        $this->browserEnqueueWindow = true;
+    }
+
+    public function maybeEnqueueBrowserObserver(mixed $args): mixed {
+        if ( ! $this->browserEnqueueWindow ) {
+            return $args;
+        }
+
+        $session = $this->loadCurrentSession();
+        if ( is_array($session) ) {
+            $this->enqueueBrowserObserverForSession($session);
+        }
+
+        return $args;
+    }
+
     public function observeInboxRender(mixed $columns, mixed $args = null): mixed {
         $session = $this->loadCurrentSession();
         if ( ! is_array($session) || 'observing' !== ($session['data']['status'] ?? null) ) {
@@ -319,6 +360,10 @@ final class GravityDiagnostics {
 
         $this->observedSessionId = $session['id'];
         ++$this->inboxHookCalls;
+
+        if ( $this->browserEnqueueWindow && 'ajax' !== $this->requestTransport() ) {
+            $this->enqueueBrowserObserverForSession($session);
+        }
 
         return $columns;
     }
@@ -343,6 +388,7 @@ final class GravityDiagnostics {
         if ( isset($traces[$traceRef]) ) {
             $this->observedSessionId = $session['id'];
             $this->inboxCandidateTraceRefs[$traceRef] = true;
+            $this->maybeTagBrowserResponse($session['id']);
         }
 
         return $value;
@@ -384,6 +430,92 @@ final class GravityDiagnostics {
                 return $session;
             }
         );
+    }
+
+    public function recordBrowserEvidence(): void {
+        $method = isset($_SERVER['REQUEST_METHOD']) && is_string($_SERVER['REQUEST_METHOD'])
+            ? strtoupper(sanitize_text_field(wp_unslash($_SERVER['REQUEST_METHOD'])))
+            : '';
+        if ( 'POST' !== $method ) {
+            wp_send_json_error(['code' => 'post_required'], 405);
+        }
+
+        if ( ! $this->browserEvidenceAuthorized() ) {
+            wp_send_json_error(['code' => 'forbidden'], 403);
+        }
+
+        $sessionId = $this->currentSessionId();
+        $session = null !== $sessionId ? $this->sessions->load($sessionId) : null;
+        if (
+            ! is_array($session) ||
+            self::SESSION_TYPE !== ($session['type'] ?? null) ||
+            ! in_array($session['data']['status'] ?? null, ['observing', 'completed'], true)
+        ) {
+            wp_send_json_error(['code' => 'session_unavailable'], 409);
+        }
+
+        $nonceResult = check_ajax_referer($this->browserNonceAction($sessionId), 'nonce', false);
+        if ( false === $nonceResult ) {
+            wp_send_json_error(['code' => 'invalid_nonce'], 403);
+        }
+
+        $payload = $this->browserEvidencePayload($_POST);
+        if ( null === $payload ) {
+            wp_send_json_error(['code' => 'invalid_evidence'], 400);
+        }
+
+        $matched = false;
+        $duplicate = false;
+        $mutated = $this->sessions->mutate(
+            $sessionId,
+            static function(array $locked) use ($payload, &$matched, &$duplicate): array {
+                if (
+                    self::SESSION_TYPE !== ($locked['type'] ?? null) ||
+                    ! in_array($locked['data']['status'] ?? null, ['observing', 'completed'], true)
+                ) {
+                    return $locked;
+                }
+
+                $samples = is_array($locked['data']['samples'] ?? null) ? array_values($locked['data']['samples']) : [];
+                foreach ( $samples as $index => $sample ) {
+                    if (
+                        ! is_array($sample) ||
+                        ! is_string($sample['sample_ref'] ?? null) ||
+                        ! hash_equals($sample['sample_ref'], $payload['sample_ref'])
+                    ) {
+                        continue;
+                    }
+                    if ( 'ajax' !== ($sample['transport'] ?? null) || empty($sample['candidate_trace_refs']) ) {
+                        return $locked;
+                    }
+
+                    $matched = true;
+                    if ( is_array($sample['browser'] ?? null) ) {
+                        $duplicate = true;
+                        return $locked;
+                    }
+
+                    $sample['browser'] = $payload['browser'];
+                    $samples[$index] = $sample;
+                    $locked['data']['samples'] = $samples;
+                    return $locked;
+                }
+
+                return $locked;
+            }
+        );
+
+        if ( ! $mutated ) {
+            wp_send_json_error(['code' => 'evidence_persistence_failed'], 409);
+        }
+        if ( ! $matched ) {
+            wp_send_json_error(['code' => 'unknown_sample'], 404);
+        }
+
+        wp_send_json_success([
+            'accepted'  => true,
+            'duplicate' => $duplicate,
+        ]);
     }
 
     public function snapshot(): array {
@@ -530,6 +662,12 @@ final class GravityDiagnostics {
                 static fn(mixed $sample): bool => is_array($sample) && 'ajax' === ($sample['transport'] ?? null)
             )
         );
+        $browserEvidenceCount = count(
+            array_filter(
+                $samples,
+                static fn(mixed $sample): bool => is_array($sample) && is_array($sample['browser'] ?? null)
+            )
+        );
         $lastObserved = is_int($data['last_observed_timestamp'] ?? null)
             ? $data['last_observed_timestamp']
             : null;
@@ -547,6 +685,8 @@ final class GravityDiagnostics {
             $traces[] = $trace;
         }
 
+        $browserAnalysis = $this->analyzeBrowserEvidence($samples, $integrity);
+
         return [
             'status'                  => $status,
             'reason'                  => null,
@@ -560,6 +700,7 @@ final class GravityDiagnostics {
             'sample_count'            => count($samples),
             'sample_count_total'      => $total,
             'ajax_sample_count'       => $ajaxSamples,
+            'browser_evidence_count'  => $browserEvidenceCount,
             'truncated'               => $total > count($samples),
             'last_observed_timestamp' => $lastObserved,
             'last_observed_at'        => null !== $lastObserved ? gmdate('c', $lastObserved) : null,
@@ -571,24 +712,33 @@ final class GravityDiagnostics {
             'traces'                  => $traces,
             'integrity'               => $integrity,
             'analysis'                => $this->analyzeSession($traces, ! empty($data['traces_truncated']), $integrity),
+            'browser_analysis'        => $browserAnalysis,
             'evidence'                => [
-                'observer_hook'                => self::INBOX_FILTER,
-                'row_observer_hook'            => self::INBOX_FIELD_VALUE_FILTER,
-                'inbox_render_observed'        => $total > 0,
-                'ajax_inbox_render_observed'   => $ajaxSamples > 0,
-                'causal_lifecycle_observer'    => true,
-                'request_duration_measured'    => $total > 0,
-                'raw_form_entry_values_stored' => false,
-                'raw_host_identifiers_stored'  => false,
-                'raw_assignee_identity_stored' => false,
-                'session_integrity_uncertain'  => ! empty($integrity['uncertain']),
+                'observer_hook'                    => self::INBOX_FILTER,
+                'row_observer_hook'                => self::INBOX_FIELD_VALUE_FILTER,
+                'inbox_render_observed'            => $total > 0,
+                'ajax_inbox_render_observed'       => $ajaxSamples > 0,
+                'causal_lifecycle_observer'        => true,
+                'request_duration_measured'        => $total > 0,
+                'browser_observer_available'       => true,
+                'browser_response_received'        => $browserEvidenceCount > 0,
+                'browser_ui_signal_observed'       => 'BROWSER_UI_SIGNAL_OBSERVED' === ($browserAnalysis['classification'] ?? null),
+                'raw_form_entry_values_stored'     => false,
+                'raw_host_identifiers_stored'      => false,
+                'raw_assignee_identity_stored'     => false,
+                'request_response_payloads_stored' => false,
+                'generic_ajax_activity_stored'     => false,
+                'session_integrity_uncertain'      => ! empty($integrity['uncertain']),
             ],
             'unknowns'                => [
-                'client_round_trip_not_measured'         => true,
-                'root_cause_not_inferred'                => true,
-                'expected_assignee_not_configured'       => true,
-                'authentic_host_runtime_not_established' => true,
-                'session_integrity_uncertain'            => ! empty($integrity['uncertain']),
+                'client_round_trip_not_measured'              => 0 === $browserEvidenceCount,
+                'entry_visible_to_user_not_proven'            => true,
+                'root_cause_not_inferred'                     => true,
+                'expected_assignee_not_configured'            => true,
+                'authentic_host_runtime_not_established'      => true,
+                'authentic_live_refresh_not_established'      => true,
+                'email_token_assignee_browser_not_qualified'  => true,
+                'session_integrity_uncertain'                 => ! empty($integrity['uncertain']),
             ],
         ];
     }
@@ -642,6 +792,7 @@ final class GravityDiagnostics {
         $traceRef = is_string($trace['trace_ref'] ?? null) ? $trace['trace_ref'] : '';
         $linkedInbox = false;
         $linkedAjaxInbox = false;
+        $browserLinked = false;
         foreach ( $samples as $sample ) {
             if ( ! is_array($sample) || ! in_array($traceRef, $sample['candidate_trace_refs'] ?? [], true) ) {
                 continue;
@@ -649,6 +800,9 @@ final class GravityDiagnostics {
             $linkedInbox = true;
             if ( 'ajax' === ($sample['transport'] ?? null) ) {
                 $linkedAjaxInbox = true;
+            }
+            if ( is_array($sample['browser'] ?? null) ) {
+                $browserLinked = true;
             }
         }
 
@@ -721,11 +875,99 @@ final class GravityDiagnostics {
             'unknowns'       => [
                 'root_cause_not_inferred'        => true,
                 'expected_assignee_not_compared' => true,
-                'browser_refresh_not_measured'   => true,
-                'client_network_not_measured'    => true,
+                'browser_refresh_not_measured'   => ! $browserLinked,
+                'client_network_not_measured'    => ! $browserLinked,
+                'entry_visible_to_user_not_proven' => true,
                 'trace_history_incomplete'       => $eventsTruncated,
                 'session_integrity_uncertain'    => ! empty($integrity['uncertain']),
             ],
+        ];
+    }
+
+    private function analyzeBrowserEvidence(array $samples, array $integrity): array {
+        if ( ! empty($integrity['uncertain']) ) {
+            return [
+                'classification' => 'BROWSER_EVIDENCE_INSUFFICIENT',
+                'reason'         => 'session_integrity_uncertain',
+                'entry_visible_to_user_proven' => false,
+            ];
+        }
+
+        $tagged = [];
+        $withEvidence = [];
+        foreach ( $samples as $sample ) {
+            if (
+                ! is_array($sample) ||
+                ! is_string($sample['sample_ref'] ?? null) ||
+                '' === $sample['sample_ref'] ||
+                empty($sample['candidate_trace_refs'])
+            ) {
+                continue;
+            }
+            $tagged[] = $sample;
+            if ( is_array($sample['browser'] ?? null) ) {
+                $withEvidence[] = $sample;
+            }
+        }
+
+        if ( [] === $tagged ) {
+            return [
+                'classification' => 'BROWSER_EVIDENCE_INSUFFICIENT',
+                'reason'         => 'no_server_tagged_browser_refresh',
+                'entry_visible_to_user_proven' => false,
+            ];
+        }
+
+        if ( [] === $withEvidence ) {
+            return [
+                'classification' => 'BROWSER_REFRESH_NOT_OBSERVED',
+                'reason'         => 'server_tagged_refresh_without_client_receipt',
+                'entry_visible_to_user_proven' => false,
+            ];
+        }
+
+        $traceRefs = [];
+        $selected = $withEvidence[count($withEvidence) - 1];
+        foreach ( $withEvidence as $sample ) {
+            foreach ( $sample['candidate_trace_refs'] ?? [] as $traceRef ) {
+                if ( is_string($traceRef) && '' !== $traceRef ) {
+                    $traceRefs[$traceRef] = true;
+                }
+            }
+            $uiSignal = $sample['browser']['ui_signal'] ?? 'none';
+            if ( in_array($uiSignal, ['title_change', 'dom_mutation', 'both'], true) ) {
+                $selected = $sample;
+            }
+        }
+
+        if ( count($traceRefs) > 1 ) {
+            return [
+                'classification' => 'BROWSER_EVIDENCE_AMBIGUOUS',
+                'reason'         => 'browser_refresh_links_multiple_candidate_traces',
+                'trace_refs'     => array_slice(array_keys($traceRefs), 0, self::TRACE_LIMIT),
+                'entry_visible_to_user_proven' => false,
+            ];
+        }
+
+        $browser = is_array($selected['browser'] ?? null) ? $selected['browser'] : [];
+        $uiSignal = is_string($browser['ui_signal'] ?? null) ? $browser['ui_signal'] : 'none';
+        $classification = in_array($uiSignal, ['title_change', 'dom_mutation', 'both'], true)
+            ? 'BROWSER_UI_SIGNAL_OBSERVED'
+            : 'BROWSER_RESPONSE_RECEIVED';
+        $reason = 'BROWSER_UI_SIGNAL_OBSERVED' === $classification
+            ? 'correlated_response_and_ui_signal_observed'
+            : 'correlated_response_received_without_ui_signal';
+
+        return [
+            'classification' => $classification,
+            'reason'         => $reason,
+            'trace_ref'      => 1 === count($traceRefs) ? array_key_first($traceRefs) : null,
+            'sample_ref'     => $selected['sample_ref'] ?? null,
+            'response_outcome' => $browser['outcome'] ?? 'unknown',
+            'http_status'    => $browser['http_status'] ?? null,
+            'ui_signal'      => $uiSignal,
+            'visibility'     => $browser['visibility'] ?? 'unknown',
+            'entry_visible_to_user_proven' => false,
         ];
     }
 
@@ -794,8 +1036,178 @@ final class GravityDiagnostics {
             'db_query_count'       => $queryCount,
             'observer_hook'        => self::INBOX_FILTER,
             'hook_calls'           => $this->inboxHookCalls,
+            'sample_ref'           => $this->browserHeaderEmitted ? $this->browserSampleRef : null,
             'candidate_trace_refs' => array_slice(array_keys($this->inboxCandidateTraceRefs), 0, self::TRACE_LIMIT),
         ];
+    }
+
+    private function enqueueBrowserObserverForSession(array $session): void {
+        if (
+            'observing' !== ($session['data']['status'] ?? null) ||
+            ! $this->browserEvidenceAuthorized() ||
+            ! function_exists('wp_enqueue_script') ||
+            ! function_exists('wp_add_inline_script') ||
+            ! function_exists('wp_create_nonce') ||
+            ! function_exists('admin_url')
+        ) {
+            return;
+        }
+
+        wp_enqueue_script(
+            self::BROWSER_SCRIPT_HANDLE,
+            WDDTF_URL . 'assets/gravity-browser-observer.js',
+            ['jquery'],
+            WDDTF_VERSION,
+            true
+        );
+
+        $config = [
+            'ajaxUrl'               => admin_url('admin-ajax.php'),
+            'action'                => self::BROWSER_EVIDENCE_ACTION,
+            'nonce'                 => wp_create_nonce($this->browserNonceAction($session['id'])),
+            'headerName'            => self::BROWSER_SAMPLE_HEADER,
+            'uiObservationWindowMs' => self::BROWSER_UI_WINDOW_MS,
+        ];
+        $json = wp_json_encode($config, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ( is_string($json) ) {
+            wp_add_inline_script(
+                self::BROWSER_SCRIPT_HANDLE,
+                'window.WDDTFGravityBrowserEvidence = ' . $json . ';',
+                'before'
+            );
+        }
+    }
+
+    private function maybeTagBrowserResponse(string $sessionId): void {
+        if (
+            $this->browserHeaderEmitted ||
+            'ajax' !== $this->requestTransport() ||
+            ! $this->browserEvidenceAuthorized() ||
+            [] === $this->inboxCandidateTraceRefs
+        ) {
+            return;
+        }
+
+        if ( null === $this->browserSampleRef ) {
+            try {
+                $this->browserSampleRef = 'gb-' . bin2hex(random_bytes(12));
+            } catch (\Throwable) {
+                return;
+            }
+        }
+
+        $this->browserHeaderEmitted = true === ($this->headerEmitter)(
+            self::BROWSER_SAMPLE_HEADER,
+            $this->browserSampleRef
+        );
+    }
+
+    private function browserEvidenceAuthorized(): bool {
+        return function_exists('is_user_logged_in')
+            && function_exists('current_user_can')
+            && is_user_logged_in()
+            && current_user_can(self::BROWSER_CAPABILITY);
+    }
+
+    private function browserNonceAction(string $sessionId): string {
+        return self::BROWSER_NONCE_DOMAIN . '|' . $sessionId;
+    }
+
+    private function browserEvidencePayload(array $input): ?array {
+        $allowedKeys = [
+            'action',
+            'nonce',
+            'sample_ref',
+            'outcome',
+            'http_status',
+            'client_received_ms',
+            'visibility',
+            'ui_signal',
+            'duration_ms',
+        ];
+        foreach ( array_keys($input) as $key ) {
+            if ( ! is_string($key) || ! in_array($key, $allowedKeys, true) ) {
+                return null;
+            }
+        }
+
+        $sampleRef = isset($input['sample_ref']) && is_string($input['sample_ref'])
+            ? trim(wp_unslash($input['sample_ref']))
+            : '';
+        if ( 1 !== preg_match('/^gb-[a-f0-9]{24}$/', $sampleRef) ) {
+            return null;
+        }
+
+        $outcome = isset($input['outcome']) && is_string($input['outcome'])
+            ? sanitize_key(wp_unslash($input['outcome']))
+            : '';
+        if ( ! in_array($outcome, ['success', 'error'], true) ) {
+            return null;
+        }
+
+        $httpStatus = $this->boundedInt($input['http_status'] ?? null, 0, 599);
+        $clientReceivedMs = $this->boundedInt($input['client_received_ms'] ?? null, 1, 9999999999999);
+        if ( null === $httpStatus || null === $clientReceivedMs ) {
+            return null;
+        }
+
+        $visibility = isset($input['visibility']) && is_string($input['visibility'])
+            ? sanitize_key(wp_unslash($input['visibility']))
+            : 'unknown';
+        if ( ! in_array($visibility, ['visible', 'hidden', 'prerender', 'unknown'], true) ) {
+            return null;
+        }
+
+        $uiSignal = isset($input['ui_signal']) && is_string($input['ui_signal'])
+            ? sanitize_key(wp_unslash($input['ui_signal']))
+            : 'none';
+        if ( ! in_array($uiSignal, ['none', 'title_change', 'dom_mutation', 'both'], true) ) {
+            return null;
+        }
+
+        $duration = null;
+        if ( array_key_exists('duration_ms', $input) && '' !== (string) $input['duration_ms'] ) {
+            if ( ! is_numeric($input['duration_ms']) ) {
+                return null;
+            }
+            $duration = round((float) $input['duration_ms'], 2);
+            if ( $duration < 0 || $duration > 300000 ) {
+                return null;
+            }
+        }
+
+        $receivedSeconds = intdiv($clientReceivedMs, 1000);
+        return [
+            'sample_ref' => $sampleRef,
+            'browser'    => [
+                'client_received_timestamp_ms' => $clientReceivedMs,
+                'client_received_at'           => gmdate('c', $receivedSeconds),
+                'server_received_timestamp'    => ($this->clock)(),
+                'server_received_at'           => gmdate('c', ($this->clock)()),
+                'outcome'                      => $outcome,
+                'http_status'                  => $httpStatus,
+                'duration_ms'                  => $duration,
+                'visibility'                   => $visibility,
+                'ui_signal'                    => $uiSignal,
+                'title_changed'                => in_array($uiSignal, ['title_change', 'both'], true),
+                'dom_mutation_observed'        => in_array($uiSignal, ['dom_mutation', 'both'], true),
+                'response_body_stored'         => false,
+                'request_body_stored'          => false,
+                'dom_content_stored'           => false,
+            ],
+        ];
+    }
+
+    private function boundedInt(mixed $value, int $min, int $max): ?int {
+        if ( is_int($value) ) {
+            $number = $value;
+        } elseif ( is_string($value) && ctype_digit($value) ) {
+            $number = (int) $value;
+        } else {
+            return null;
+        }
+
+        return $number >= $min && $number <= $max ? $number : null;
     }
 
     private function baseEvent(string $type): array {
@@ -929,6 +1341,7 @@ final class GravityDiagnostics {
             'sample_count'            => 0,
             'sample_count_total'      => 0,
             'ajax_sample_count'       => 0,
+            'browser_evidence_count'  => 0,
             'truncated'               => false,
             'last_observed_timestamp' => null,
             'last_observed_at'        => null,
@@ -947,24 +1360,37 @@ final class GravityDiagnostics {
                 'classification' => 'ENTRY_NOT_OBSERVED',
                 'reason'         => 'no_candidate_entry_lifecycle_observed',
             ],
+            'browser_analysis'        => [
+                'classification' => 'BROWSER_EVIDENCE_INSUFFICIENT',
+                'reason'         => 'no_server_tagged_browser_refresh',
+                'entry_visible_to_user_proven' => false,
+            ],
             'evidence'                => [
-                'observer_hook'                => self::INBOX_FILTER,
-                'row_observer_hook'            => self::INBOX_FIELD_VALUE_FILTER,
-                'inbox_render_observed'        => false,
-                'ajax_inbox_render_observed'   => false,
-                'causal_lifecycle_observer'    => true,
-                'request_duration_measured'    => false,
-                'raw_form_entry_values_stored' => false,
-                'raw_host_identifiers_stored'  => false,
-                'raw_assignee_identity_stored' => false,
-                'session_integrity_uncertain'  => false,
+                'observer_hook'                    => self::INBOX_FILTER,
+                'row_observer_hook'                => self::INBOX_FIELD_VALUE_FILTER,
+                'inbox_render_observed'            => false,
+                'ajax_inbox_render_observed'       => false,
+                'causal_lifecycle_observer'        => true,
+                'request_duration_measured'        => false,
+                'browser_observer_available'       => true,
+                'browser_response_received'        => false,
+                'browser_ui_signal_observed'       => false,
+                'raw_form_entry_values_stored'     => false,
+                'raw_host_identifiers_stored'      => false,
+                'raw_assignee_identity_stored'     => false,
+                'request_response_payloads_stored' => false,
+                'generic_ajax_activity_stored'     => false,
+                'session_integrity_uncertain'      => false,
             ],
             'unknowns'                => [
-                'client_round_trip_not_measured'         => true,
-                'root_cause_not_inferred'                => true,
-                'expected_assignee_not_configured'       => true,
-                'authentic_host_runtime_not_established' => true,
-                'session_integrity_uncertain'            => false,
+                'client_round_trip_not_measured'             => true,
+                'entry_visible_to_user_not_proven'           => true,
+                'root_cause_not_inferred'                    => true,
+                'expected_assignee_not_configured'           => true,
+                'authentic_host_runtime_not_established'     => true,
+                'authentic_live_refresh_not_established'     => true,
+                'email_token_assignee_browser_not_qualified' => true,
+                'session_integrity_uncertain'                => false,
             ],
         ];
     }
