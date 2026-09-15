@@ -128,11 +128,11 @@ final class GravityDiagnosticsTest extends TestCase {
         self::assertCount(20, $after['samples']);
     }
 
-    public function test_host_snapshot_reports_gravity_forms_version_without_collecting_business_data(): void {
+    public function test_host_snapshot_reports_privacy_safe_gravity_forms_version_without_collecting_business_data(): void {
         $hosts = $this->makeDiagnostics()->snapshot()['hosts'];
 
         self::assertTrue($hosts['gravity_forms']['available']);
-        self::assertSame('3.1.1.1', $hosts['gravity_forms']['version']);
+        self::assertSame('v3.1.1.1', $hosts['gravity_forms']['version']);
         self::assertTrue($hosts['gravity_flow']['available']);
     }
 
