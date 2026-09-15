@@ -73,7 +73,7 @@
             return;
         }
 
-        if (!/^gb-[a-f0-9]{24}$/.test(sampleRef)) {
+        if (!/^gb-[a-f0-9]{20}$/.test(sampleRef)) {
             return;
         }
 
