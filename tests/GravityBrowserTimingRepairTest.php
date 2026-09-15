@@ -76,8 +76,8 @@ final class GravityBrowserTimingRepairTest extends TestCase {
         $now = 1000;
         $store = new SessionStore(
             static function() use (&$now): int { return $now; },
-            static fn(): string => 'ds-timingrepair0001',
-            static fn(): string => 'lk-timingrepair000000000001',
+            static fn(): string => 'ds-bbbbbbbbbbbbbbbb',
+            static fn(): string => 'lk-bbbbbbbbbbbbbbbbbbbbbbbb',
             static function(int $microseconds): void {}
         );
 
