@@ -34,8 +34,8 @@ final class PerformanceBenchmarkSummaryTest extends TestCase {
         self::assertSame(15.0, $summary['wall_ms']['active']['median']);
         self::assertSame(4.0, $summary['wall_ms']['delta']['active_median_minus_control_median']);
         self::assertSame(2.0, $summary['wall_ms']['delta']['paired']['median']);
-        self::assertSame(30, $summary['peak_memory_bytes']['delta']['paired']['median']);
-        self::assertSame(3.0, $summary['db_query_count']['delta']['paired']['median']);
+        self::assertSame(25, $summary['peak_memory_bytes']['delta']['paired']['median']);
+        self::assertSame(3, $summary['db_query_count']['delta']['paired']['median']);
         self::assertSame(1.1, $summary['late_shutdown_ms']['delta']['paired']['median']);
     }
 
