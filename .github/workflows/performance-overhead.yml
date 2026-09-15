@@ -1,0 +1,154 @@
+name: Performance overhead qualification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  overhead-characterization:
+    name: Matched control/active overhead / WordPress 6.5 / PHP 8.1
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: wordpress
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout exact triggering revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Verify exact checkout identity
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_SHA"
+          echo "Exact checkout verified: $actual_sha"
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: composer:v2,wp-cli
+          coverage: none
+
+      - name: Install test dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Verify benchmark summary contract
+        run: vendor/bin/phpunit tests/PerformanceBenchmarkSummaryTest.php
+
+      - name: Build deterministic product artifact
+        run: |
+          set -euo pipefail
+          python3 create_fixed_plugin.py
+          first="$(sha256sum dist/wp-deep-diagnostics.zip | awk '{print $1}')"
+          rm -rf build dist
+          python3 create_fixed_plugin.py
+          second="$(sha256sum dist/wp-deep-diagnostics.zip | awk '{print $1}')"
+          test "$first" = "$second"
+          echo "Product artifact SHA-256: $second"
+
+      - name: Install matched disposable WordPress runtime
+        run: |
+          set -euo pipefail
+          mkdir wordpress artifacts
+          cd wordpress
+          wp core download --version=6.5 --quiet
+          wp config create --dbname=wordpress --dbuser=root --dbpass=root --dbhost=127.0.0.1:3306 --skip-check --quiet
+          wp config set WP_HTTP_BLOCK_EXTERNAL true --raw --quiet
+          wp core install \
+            --url=http://127.0.0.1:8080 \
+            --title='Deep Diagnostics performance qualification' \
+            --admin_user=admin \
+            --admin_password='ci-password' \
+            --admin_email=admin@example.test \
+            --skip-email \
+            --quiet
+          unzip -q ../dist/wp-deep-diagnostics.zip -d wp-content/plugins
+          wp plugin is-installed wp-deep-diagnostics
+          mkdir -p wp-content/mu-plugins
+          cp ../tests/performance/benchmark-probe.php wp-content/mu-plugins/wddtf-performance-benchmark-probe.php
+
+      - name: Run matched active/inactive characterization
+        env:
+          BENCHMARK_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          cd wordpress
+          php -S 127.0.0.1:8080 -t . >/tmp/wddtf-performance-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/wp-login.php >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat /tmp/wddtf-performance-server.log >&2 || true
+            exit 1
+          fi
+
+          php ../tests/performance/benchmark.php \
+            --wordpress-dir="$PWD" \
+            --base-url=http://127.0.0.1:8080 \
+            --samples=15 \
+            --warmups=1 \
+            --git-sha="$BENCHMARK_SHA" \
+            --output=../artifacts/performance-overhead.json \
+            --summary=../artifacts/performance-overhead.md
+
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          trap - EXIT
+
+      - name: Verify benchmark produced normal Deep report output
+        working-directory: wordpress
+        run: |
+          set -euo pipefail
+          wp plugin activate wp-deep-diagnostics --quiet
+          wp eval '
+            $report = get_transient("wddtf_last_report");
+            if (!is_array($report) || !isset($report["meta"], $report["synthesis"], $report["llm_bundle"])) {
+                fwrite(STDERR, "active benchmark did not leave a normal finalized report\n");
+                exit(1);
+            }
+            echo "normal finalized report contract observed\n";
+          '
+
+      - name: Publish human-readable characterization
+        run: |
+          set -euo pipefail
+          cat artifacts/performance-overhead.md
+          cat artifacts/performance-overhead.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload machine-readable benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: deep-diagnostics-performance-overhead-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/performance-overhead.json
+            artifacts/performance-overhead.md
+          if-no-files-found: error
+          retention-days: 14
