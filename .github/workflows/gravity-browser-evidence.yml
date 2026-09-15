@@ -267,7 +267,7 @@ jobs:
               throw new Error('unrelated AJAX received diagnostic sample header');
             }
             const sampleRef = refresh.headers()['x-wddtf-gravity-sample'] || '';
-            if (!/^gb-[a-f0-9]{24}$/.test(sampleRef)) {
+            if (!/^gb-[a-f0-9]{20}$/.test(sampleRef)) {
               throw new Error('relevant refresh missing bounded sample header');
             }
             if (evidence.status() !== 200) {
@@ -317,7 +317,7 @@ jobs:
                 fwrite(STDERR, "browser signal overclaimed user visibility\n"); exit(1);
             }
             $sample = $o["samples"][0] ?? [];
-            if (!preg_match("/^gb-[a-f0-9]{24}$/", (string) ($sample["sample_ref"] ?? ""))) {
+            if (!preg_match("/^gb-[a-f0-9]{20}$/", (string) ($sample["sample_ref"] ?? ""))) {
                 fwrite(STDERR, "opaque sample ref missing\n"); exit(1);
             }
             if (!is_array($sample["browser"] ?? null)) { fwrite(STDERR, "browser sample metadata missing\n"); exit(1); }
