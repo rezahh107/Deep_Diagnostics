@@ -139,7 +139,7 @@ final class WDDTF_Performance_Benchmark_Probe {
         }
 
         $sampleId = wp_unslash($_GET['wddtf_benchmark_sample']);
-        if ( 1 !== preg_match('/^[a-z0-9-]{1,80}$/', $sampleId) ) {
+        if ( 1 !== preg_match('/^[a-z0-9_-]{1,80}$/', $sampleId) ) {
             return null;
         }
 
