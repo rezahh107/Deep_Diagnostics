@@ -11,11 +11,11 @@ final class GravityReportTest extends TestCase {
             'hosts' => [
                 'gravity_forms' => [
                     'available' => true,
-                    'version' => '3.1.1.1',
+                    'version' => 'v3.1.1.1',
                 ],
                 'gravity_flow' => [
                     'available' => true,
-                    'version' => '3.1.0',
+                    'version' => 'v3.1.0',
                 ],
             ],
             'inbox_observation' => [
@@ -59,7 +59,7 @@ final class GravityReportTest extends TestCase {
         self::assertSame($gravity, $report['layers']['gravity']);
         self::assertSame($gravity, $report['llm_bundle']['gravity']);
         self::assertStringContainsString('Gravity Forms / Gravity Flow Diagnostics', $markdown);
-        self::assertStringContainsString('Gravity Flow version: 3.1.0', $markdown);
+        self::assertStringContainsString('Gravity Flow version: v3.1.0', $markdown);
         self::assertStringContainsString('AJAX Inbox samples observed: 1', $markdown);
         self::assertStringContainsString('"transport":"ajax"', $markdown);
     }
