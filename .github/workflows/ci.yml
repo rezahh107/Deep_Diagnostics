@@ -245,14 +245,13 @@ jobs:
             delete_transient("wddtf_cron_qualification_current");
             wp_clear_scheduled_hook(\WDDTF\Cron\CronDiagnostics::PROBE_HOOK);
           '
-          if wp eval '
+          # WP-CLI does not provide a stable non-zero process status for every wp_die()
+          # path. The contract under test is that a GET cannot create the probe.
+          wp eval '
             $_SERVER["REQUEST_METHOD"] = "GET";
             $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_run_cron_qualification");
             (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->runCronQualification();
-          ' --user=admin; then
-            echo "GET unexpectedly executed Cron qualification" >&2
-            exit 1
-          fi
+          ' --user=admin || true
           test "$(wp cron event list --field=hook | grep -xc 'wddtf_cron_qualification_probe' || true)" -eq 0
           wp eval '
             $_SERVER["REQUEST_METHOD"] = "POST";
