@@ -96,8 +96,6 @@ jobs:
         working-directory: wordpress
         run: |
           set -euo pipefail
-          # Activation changes the active-plugin option after WordPress has already booted,
-          # so run one normal command with the plugin active and allow shutdown finalization.
           wp eval 'echo "diagnostic request primed\n";'
           wp eval '
             $report = get_transient("wddtf_last_report");
@@ -121,6 +119,7 @@ jobs:
           set -euo pipefail
           wp eval '
             $hook = \WDDTF\Cron\CronDiagnostics::PROBE_HOOK;
+            set_transient("wddtf_cron_qualification_current", "malformed-session-pointer", HOUR_IN_SECONDS);
             if (false !== wp_get_scheduled_event($hook)) {
                 fwrite(STDERR, "unexpected pre-existing probe\n"); exit(1);
             }
@@ -129,6 +128,9 @@ jobs:
             $html = ob_get_clean();
             if (false !== wp_get_scheduled_event($hook)) {
                 fwrite(STDERR, "admin render scheduled a probe\n"); exit(1);
+            }
+            if ("malformed-session-pointer" !== get_transient("wddtf_cron_qualification_current")) {
+                fwrite(STDERR, "admin render mutated stale diagnostic state\n"); exit(1);
             }
             if (false === strpos($html, "WP-Cron Diagnostics")) {
                 fwrite(STDERR, "cron admin section missing\n"); exit(1);
@@ -174,7 +176,6 @@ jobs:
             }
             echo "qualification completed with delay=" . $q["delay_seconds"] . "s\n";
           '
-          # The previous normal request finalizes at shutdown with the correlated Cron evidence.
           wp eval '
             $report = get_transient("wddtf_last_report");
             $cron = $report["layers"]["cron"] ?? null;
@@ -216,12 +217,19 @@ jobs:
           '
           wp cron event delete wddtf_cron_qualification_probe --quiet
           wp eval '
-            set_transient("wddtf_cron_qualification_current", "malformed-session-pointer", HOUR_IN_SECONDS);
             $manager = new \WDDTF\Diagnostics\Manager();
+            $pointerBefore = get_transient("wddtf_cron_qualification_current");
             $first = $manager->getCronDiagnostics()["qualification"];
             $second = $manager->getCronDiagnostics()["qualification"];
-            if ("unknown" !== ($first["status"] ?? "") || "not_started" !== ($second["status"] ?? "")) {
-                fwrite(STDERR, "stale session did not fail closed and self-heal\n"); exit(1);
+            if ("unknown" !== ($first["status"] ?? "") || "pending_event_not_observable" !== ($first["reason"] ?? "")) {
+                fwrite(STDERR, "missing scheduled event did not become ambiguous\n"); exit(1);
             }
-            echo "stale state handling ok\n";
+            if ($first !== $second || $pointerBefore !== get_transient("wddtf_cron_qualification_current")) {
+                fwrite(STDERR, "passive stale reads mutated state\n"); exit(1);
+            }
+            $recovered = $manager->startCronQualification();
+            if (empty($recovered["started"]) || "pending" !== ($recovered["qualification"]["status"] ?? "")) {
+                fwrite(STDERR, "explicit qualification did not recover stale state\n"); exit(1);
+            }
+            echo "stale state recovery ok\n";
           '
