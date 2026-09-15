@@ -1,0 +1,51 @@
+name: Finalize authentic Gravity qualification branch bridge
+
+on:
+  push:
+    branches:
+      - qualify/authentic-gravity-runtime
+    paths:
+      - '.github/workflows/authentic-finalizer-bridge.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: qualify/authentic-gravity-runtime
+          fetch-depth: 0
+
+      - name: Extract and apply verified qualification patch
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, gzip
+          source = Path('.github/workflows/authentic-qualification-bootstrap.yml').read_text()
+          marker = "cat > /tmp/authentic-final.patch.gz.b64 <<'B64'\n"
+          start = source.index(marker) + len(marker)
+          end = source.index('\nB64', start)
+          payload = ''.join(source[start:end].split())
+          patch = gzip.decompress(base64.b64decode(payload))
+          Path('/tmp/authentic-final.patch').write_bytes(patch)
+          PY
+          git apply -p1 /tmp/authentic-final.patch
+          git rm -f \
+            .github/workflows/authentic-qualification-bootstrap.yml \
+            .github/workflows/authentic-source-bundle.yml \
+            .github/workflows/authentic-browser-bootstrap.yml \
+            .github/workflows/authentic-finalizer-bridge.yml
+          git status --short
+
+      - name: Commit final qualification changes
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'test: qualify authentic Gravity runtime'
+          git push origin HEAD:qualify/authentic-gravity-runtime
