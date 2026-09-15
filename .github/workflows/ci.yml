@@ -270,6 +270,9 @@ jobs:
             echo "admin GET rejection boundary ok\n";
           ' --user=admin
           wp eval '
+            if (has_filter("wp_redirect", "WP_CLI\\Utils\\wp_redirect_handler")) {
+                remove_filter("wp_redirect", "WP_CLI\\Utils\\wp_redirect_handler");
+            }
             $_SERVER["REQUEST_METHOD"] = "POST";
             $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_run_cron_qualification");
             (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->runCronQualification();
