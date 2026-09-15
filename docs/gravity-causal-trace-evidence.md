@@ -54,20 +54,22 @@ Every persisted Diagnostic Session write passes through `WDDTF\Privacy\Redactor`
 
 The browser layer is deliberately not a generalized AJAX or network recorder.
 
-When an authenticated AJAX Inbox request reaches the existing row-level candidate correlation hook and at least one already-known opaque candidate trace is positively linked, Deep Diagnostics may add one bounded response header containing a random opaque `gb-...` sample reference. The server stores that same opaque reference on the existing Inbox request sample. Unrelated AJAX traffic that never produces candidate-linked Inbox evidence receives no diagnostic response tag and is not persisted as browser evidence.
+When a candidate-linked Inbox request reaches the existing server-side correlation seams, Deep Diagnostics may add one bounded response header containing a random opaque `gb-...` sample reference and retain that same reference on the existing Inbox request sample. This applies to the supported authenticated AJAX path and, after the authentic-host compatibility repair, the native Gravity Flow REST Live Data Refresh path. Unrelated AJAX or REST traffic that never produces candidate-linked Inbox evidence receives no diagnostic response tag and is not persisted as browser evidence.
 
-The client observer is loaded only while an explicit Gravity diagnostic session is active and only in Gravity Flow Inbox rendering contexts reached through the documented enqueue/Inbox seams. It uses jQuery lifecycle events instead of monkey-patching `XMLHttpRequest`, `fetch`, or application networking. The observer may transiently see that requests started/completed, but it ignores every request unless the response carries the exact server-issued diagnostic sample header.
+The authentic Gravity Flow 3.1.0 runtime established that native Live Data Refresh uses a REST `fetch()` path whose callback may not retain the normal WordPress current-user state even though the same-origin browser carries a valid logged-in WordPress cookie. For that candidate-linked REST path only, DEEP validates the standard WordPress logged-in cookie with `wp_validate_auth_cookie()` when needed and then requires the resolved user to have `gravityflow_inbox`. This is a narrow host-compatibility boundary, not a generalized REST authentication or tracing layer.
+
+The client observer is loaded only while an explicit Gravity diagnostic session is active and only in Gravity Flow Inbox rendering contexts reached through the documented enqueue/Inbox seams. It observes the established jQuery path and the scoped native `fetch()` path only far enough to read the server-issued `X-WDDTF-Gravity-Sample` response header and bounded status/timing metadata. It does not inspect or persist request URLs, query strings, request bodies, response bodies, cookies, arbitrary headers, Inbox row text, HTML, submitted field values, Entry content, names, or other DOM content.
 
 For a positively tagged refresh, the browser sends only the following bounded metadata back to WordPress:
 
 - the opaque `gb-...` sample reference;
 - client receipt timestamp;
-- success/error outcome and numeric HTTP status as observable by jQuery;
+- success/error outcome and numeric HTTP status when observable;
 - bounded client duration when measurable;
 - document visibility state;
 - one metadata-only UI signal: no signal, document-title change, DOM mutation, or both.
 
-The observer never sends or stores the request URL, query string, request body, response body, cookies, general headers, Inbox row text, HTML, submitted field values, Entry content, names, or other DOM content. Mutation observation records only that mutation activity occurred; it does not capture mutated text or markup.
+Mutation observation records only that mutation activity occurred; it does not capture mutated text or markup.
 
 ### Browser evidence security boundary
 
@@ -80,11 +82,11 @@ The browser evidence write endpoint exists only as an authenticated `wp_ajax_...
 - the current bounded Gravity Diagnostic Session to exist and be unexpired;
 - a WordPress nonce bound to that current session;
 - a strict allow-listed request schema;
-- an opaque sample reference already present on a candidate-linked AJAX Inbox sample in that same current session.
+- an opaque sample reference already present on a candidate-linked Inbox sample in that same current session.
 
 The client cannot nominate a diagnostic `session_id`, Entry/Form/Step identity, or trace reference. Unknown/forged sample references, expired sessions, failed nonces, missing Inbox permission, or extra payload fields are rejected. Each server sample accepts at most one browser evidence object; repeated writes are idempotent and cannot expand storage beyond the existing sample bound.
 
-This batch intentionally qualifies authenticated Inbox operators. Gravity Flow contexts that rely on unauthenticated/tokenized email-assignee access are not silently treated as equivalent; their browser evidence remains unqualified until an authentic-host security/permission path is demonstrated.
+This qualification covers authenticated Inbox operators. Gravity Flow contexts that rely on unauthenticated/tokenized email-assignee access are not silently treated as equivalent and remain outside the current authentic evidence ceiling.
 
 ## Serialized session mutation and evidence integrity
 
@@ -113,7 +115,7 @@ The trace keeps evidence and interpretation separate. Its deterministic first-in
 - `INSUFFICIENT_EVIDENCE`;
 - `TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION`.
 
-`TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION` remains a server-side classification. It means that the server-side evidence chain reached an Inbox row/render associated with that opaque trace. The browser batch does not redefine or upgrade it.
+`TRACE_COMPLETE_TO_SERVER_INBOX_OBSERVATION` remains a server-side classification. It means that the server-side evidence chain reached an Inbox row/render associated with that opaque trace. The browser layer does not redefine or upgrade it.
 
 Separate browser interpretations are additive:
 
@@ -123,7 +125,7 @@ Separate browser interpretations are additive:
 - `BROWSER_UI_SIGNAL_OBSERVED`: the tagged response reached the browser and a metadata-only title/DOM mutation signal occurred in the short observation window;
 - `BROWSER_EVIDENCE_AMBIGUOUS`: accepted browser evidence is associated with more than one plausible opaque candidate trace.
 
-None of these browser classifications means that the expected Entry became visible to a human. A DOM mutation or title change is only a UI-side signal. Missing browser evidence is not converted into “Gravity Flow is broken.”
+None of these DEEP browser classifications means that the expected Entry became visible to a human. A DOM mutation or title change is only a UI-side signal. Missing browser evidence is not converted into “Gravity Flow is broken.” The PR #9 authentic qualification independently asserted real row visibility outside this DEEP classification, and `entry_visible_to_user_proven` deliberately remained `false` inside DEEP.
 
 A trace whose retained chronology exceeded the 24-event bound is explicitly marked incomplete. If the retained events already positively prove the complete server-to-Inbox chain, that positive fact may remain proven. Otherwise no absence-dependent classification is emitted from the truncated history; analysis stops at `INSUFFICIENT_EVIDENCE` with reason `trace_event_limit_reached`. The existing session-level candidate-trace truncation remains `INSUFFICIENT_EVIDENCE` as well.
 
@@ -131,23 +133,32 @@ When multiple candidate entries occur during one diagnostic session, the session
 
 ## Request scope
 
-Ordinary AJAX and REST requests still do not finalize general Deep Diagnostics reports. The Gravity observer writes only when one of its documented host seams fires during an explicitly active bounded session. An unrelated AJAX request therefore does not become generalized trace data. Browser evidence is accepted only for a server-tagged, candidate-linked Inbox sample already persisted in that session.
+Ordinary AJAX and REST requests still do not finalize general Deep Diagnostics reports. The Gravity observer writes only when one of its documented/candidate-linked host seams fires during an explicitly active bounded session. An unrelated AJAX or REST request therefore does not become generalized trace data. Browser evidence is accepted only for a server-tagged, candidate-linked Inbox sample already persisted in that session.
 
 ## Verification and claim ceiling
 
-Repository CI installs the real generated Deep Diagnostics artifact into disposable WordPress 6.5 and current-release environments. The existing CI-only causal host fixture reproduces the documented server hook signatures across real `admin-ajax.php` requests.
+Repository CI installs the real generated Deep Diagnostics artifact into disposable WordPress 6.5 and current-release environments. The CI-only causal host fixture reproduces documented server hook signatures across real WordPress request boundaries. A separate proprietary-free browser fixture models supported Inbox signals and lets Playwright/Chromium verify DEEP's own observer transport, scoping, browser evidence write, privacy filtering, unrelated-request exclusion, report integration, and interpretation around those modeled seams.
 
-A separate CI-only browser fixture may model a Gravity Inbox page, a jQuery refresh request, the documented Inbox server hooks, and a modeled title/DOM update. Playwright/Chromium can then prove Deep Diagnostics’ own enqueue scoping, server tag, browser receipt, browser-to-server write, privacy filtering, unrelated-AJAX exclusion, report integration, and browser interpretation around those modeled seams.
+Fixture PASS does not become commercial-host evidence. It proves DEEP behavior around the modeled seams.
 
-The fixture is **not** Gravity Forms or Gravity Flow. A browser fixture PASS does not prove that the commercial Gravity Flow package uses identical networking, emits identical DOM mutations, or visibly presents the expected Entry. It proves only that Deep Diagnostics behaves correctly when the modeled documented/server-tagged signals occur.
+Separately, PR #9 completed the Owner-authorized authentic reference qualification documented in `docs/gravity-authentic-host-qualification.md` using Gravity Forms 3.1.1.1, Gravity Flow 3.1.0, WordPress 6.5, PHP 8.1.34, MariaDB 10.11.19, and Chromium. That execution proved the real reference workflow and independently verified that the expected synthetic Entry became visible in the assigned operator's real Gravity Flow Inbox through native Live Data Refresh. DEEP's own server/browser classifications remained separately bounded, including `entry_visible_to_user_proven=false`.
 
-No legally available authentic Gravity Forms / Gravity Flow package is required to complete this fixture-level batch. Authentic licensed host-runtime qualification, authentic Gravity Flow Live Data Refresh behavior, and actual SRWF browser behavior remain unverified until executed on a site containing those licensed/product components.
+The authentic reference qualification does **not** prove:
 
-The sequential PHP development server used by fixture CI is cross-request/browser transport evidence, not production-load or concurrency proof. Session serialization remains covered by the deterministic SessionStore interleaving tests.
+- all Gravity Forms or Gravity Flow versions;
+- current-WordPress commercial runtime;
+- tokenized/unauthenticated email-assignee Inbox contexts;
+- SRWF-specific workflow/business behavior;
+- production-load/performance characteristics;
+- notification/feed timing;
+- Gravity View or Gravity Perks integration;
+- generalized AJAX/REST/network tracing.
 
-## Later authentic-host compatibility qualification
+The sequential PHP development server used by fixture CI remains cross-request/browser transport evidence, not production-load or concurrency proof. Session serialization remains covered by deterministic SessionStore interleaving tests.
 
-The implementation intentionally contains no SRWF-specific rules, fixed form/step/field IDs, or Gravity Flow internal AJAX action names. Later qualification should therefore require evidence rather than code changes:
+## Further authentic-host compatibility qualification
+
+The implementation intentionally contains no SRWF-specific rules, fixed form/step/field IDs, or Gravity Flow internal business semantics. Qualification for another commercial host/version/environment should therefore require fresh evidence rather than automatically inheriting PR #9's exact-scenario result:
 
 1. record exact licensed Gravity Forms and Gravity Flow versions and the WordPress/PHP environment;
 2. start one bounded Gravity diagnostic as an administrator;
@@ -159,4 +170,4 @@ The implementation intentionally contains no SRWF-specific rules, fixed form/ste
 8. inspect JSON, Markdown, and LLM-ready output for absence of raw IDs, field values, names, payloads, URLs/query data, cookies, and PII;
 9. repeat any tokenized/unauthenticated assignee path separately before claiming that security context is supported.
 
-Browser/network Live Refresh fixture evidence does not qualify notification/feed timing, generalized AJAX/REST tracing, business-specific expected-assignee correctness, production-load overhead, or product-wide UI behavior.
+Browser/network Live Refresh evidence does not qualify notification/feed timing, generalized AJAX/REST tracing, business-specific expected-assignee correctness, production-load overhead, or product-wide UI behavior.

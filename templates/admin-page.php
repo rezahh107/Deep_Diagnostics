@@ -40,7 +40,7 @@ $inboxStatusLabels = [
 $browserGuidance = [
     'BROWSER_UI_SIGNAL_OBSERVED' => [
         __('A correlated Inbox refresh response reached this browser and a metadata-only title or DOM mutation signal was observed afterward.', 'wp-deep-diagnostics'),
-        __('Confirm the expected Inbox row visually on the real licensed Gravity Flow site. DEEP has not proved which content became visible to the user.', 'wp-deep-diagnostics'),
+        __('Confirm the expected Inbox row visually on the relevant Gravity Flow site. DEEP has not proved which content became visible to the user.', 'wp-deep-diagnostics'),
     ],
     'BROWSER_RESPONSE_RECEIVED' => [
         __('A correlated Inbox refresh response reached this browser, but no supported UI-side title or DOM mutation signal was observed in the short evidence window.', 'wp-deep-diagnostics'),
@@ -193,7 +193,7 @@ $gravityActionNotices = [
 
         <div class="notice notice-info inline"><p>
             <strong><?php esc_html_e('Browser evidence ceiling:', 'wp-deep-diagnostics'); ?></strong>
-            <?php esc_html_e('a response receipt or metadata-only title/DOM mutation signal does not prove that the expected Entry became visible to the user. Authentic Gravity Flow browser behavior still requires qualification on a licensed site.', 'wp-deep-diagnostics'); ?>
+            <?php esc_html_e('DEEP\'s own browser classification still does not prove which Entry became visible. The reference workflow was independently qualified on Gravity Forms 3.1.1.1, Gravity Flow 3.1.0, WordPress 6.5, PHP 8.1.34, and Chromium: the expected Entry became visible through native Live Data Refresh. That independent qualification does not extend to other Gravity versions, current-WordPress commercial runtime, SRWF-specific behavior, production load, notification/feed timing, Gravity View/Perks, or generalized network tracing.', 'wp-deep-diagnostics'); ?>
         </p></div>
 
         <div class="wddtf-columns">
@@ -326,25 +326,82 @@ $gravityActionNotices = [
         <?php if ( empty($report) ) : ?>
             <p><?php esc_html_e('No report yet. Load any admin page and refresh.', 'wp-deep-diagnostics'); ?></p>
         <?php else : ?>
-            <?php $queries_warning = $report['layers']['database']['warning'] ?? ''; ?>
-            <?php if ( $queries_warning ) : ?>
-                <div class="notice notice-warning inline"><p>
-                    <?php echo esc_html($queries_warning); ?>
-                    <?php esc_html_e(' Add define( "SAVEQUERIES", true ) to wp-config.php to enable precise query timing.', 'wp-deep-diagnostics'); ?>
-                </p></div>
-            <?php endif; ?>
+            <?php
+            $synthesis = is_array($report['synthesis'] ?? null) ? $report['synthesis'] : [];
+            $synthesisFindings = is_array($synthesis['findings'] ?? null) ? $synthesis['findings'] : [];
+            $synthesisStatus = is_string($synthesis['status'] ?? null) ? $synthesis['status'] : 'insufficient_evidence';
+            $synthesisNotice = in_array($synthesisStatus, ['strong_signal', 'multiple_signals'], true) ? 'warning' : 'info';
+            ?>
 
-            <p><?php esc_html_e('Top bottleneck', 'wp-deep-diagnostics'); ?>: <?php echo esc_html($report['bottlenecks'][0]['name'] ?? 'n/a'); ?></p>
+            <div class="notice notice-<?php echo esc_attr($synthesisNotice); ?> inline" role="status"><p>
+                <strong><?php esc_html_e('Result:', 'wp-deep-diagnostics'); ?></strong>
+                <?php echo esc_html((string) ($synthesis['result'] ?? __('No evidence-first synthesis is available for this report.', 'wp-deep-diagnostics'))); ?>
+            </p></div>
 
-            <label class="screen-reader-text" for="wddtf-llm-bundle"><?php esc_html_e('LLM-ready diagnostic JSON', 'wp-deep-diagnostics'); ?></label>
-            <textarea id="wddtf-llm-bundle" readonly rows="20" class="large-text code wddtf-code-output" dir="ltr"><?php
-                echo esc_textarea(
-                    wp_json_encode(
-                        $report['llm_bundle'] ?? [],
-                        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
-                    )
-                );
-            ?></textarea>
+            <?php foreach ( $synthesisFindings as $findingIndex => $finding ) : ?>
+                <?php
+                $findingId = 'wddtf-normal-finding-' . (int) $findingIndex;
+                $facts = is_array($finding['observed_facts'] ?? null) ? $finding['observed_facts'] : [];
+                ?>
+                <article class="wddtf-finding" aria-labelledby="<?php echo esc_attr($findingId); ?>">
+                    <h3 id="<?php echo esc_attr($findingId); ?>">
+                        <?php echo esc_html((string) ($finding['title'] ?? __('Diagnostic finding', 'wp-deep-diagnostics'))); ?>
+                        <code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($finding['strength'] ?? 'unknown')); ?></code>
+                    </h3>
+                    <table class="widefat striped wddtf-kv-table"><tbody>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Plain-language meaning', 'wp-deep-diagnostics'); ?></th>
+                            <td><?php echo esc_html((string) ($finding['meaning'] ?? $finding['result'] ?? '')); ?></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Evidence that supports it', 'wp-deep-diagnostics'); ?></th>
+                            <td>
+                                <?php if ( ! empty($facts) ) : ?>
+                                    <ul>
+                                        <?php foreach ( $facts as $fact ) : ?>
+                                            <li><?php echo esc_html((string) $fact); ?></li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                <?php else : ?>
+                                    <?php esc_html_e('No additional retained fact is available.', 'wp-deep-diagnostics'); ?>
+                                <?php endif; ?>
+                                <?php if ( isset($finding['evidence']['end_boundary']) ) : ?>
+                                    <p>
+                                        <?php esc_html_e('Lifecycle end boundary:', 'wp-deep-diagnostics'); ?>
+                                        <code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) $finding['evidence']['end_boundary']); ?></code>
+                                    </p>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('What DEEP cannot prove', 'wp-deep-diagnostics'); ?></th>
+                            <td><?php echo esc_html((string) ($finding['claim_ceiling'] ?? __('The retained evidence does not support a stronger causal claim.', 'wp-deep-diagnostics'))); ?></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Recommended next step', 'wp-deep-diagnostics'); ?></th>
+                            <td><?php echo esc_html((string) ($finding['next_step'] ?? __('Collect another representative request with the missing timing evidence.', 'wp-deep-diagnostics'))); ?></td>
+                        </tr>
+                    </tbody></table>
+                </article>
+            <?php endforeach; ?>
+
+            <details class="wddtf-trace">
+                <summary><?php esc_html_e('Technical evidence and LLM-ready JSON', 'wp-deep-diagnostics'); ?></summary>
+                <p class="description"><?php esc_html_e('The legacy heuristic bottleneck ranking is retained for backward compatibility only. The evidence-first synthesis above is the normal user guidance surface.', 'wp-deep-diagnostics'); ?></p>
+                <p>
+                    <?php esc_html_e('Legacy heuristic top signal:', 'wp-deep-diagnostics'); ?>
+                    <code class="wddtf-tech" dir="ltr"><?php echo esc_html((string) ($report['bottlenecks'][0]['name'] ?? 'n/a')); ?></code>
+                </p>
+                <label class="screen-reader-text" for="wddtf-llm-bundle"><?php esc_html_e('LLM-ready diagnostic JSON', 'wp-deep-diagnostics'); ?></label>
+                <textarea id="wddtf-llm-bundle" readonly rows="20" class="large-text code wddtf-code-output" dir="ltr"><?php
+                    echo esc_textarea(
+                        wp_json_encode(
+                            $report['llm_bundle'] ?? [],
+                            JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+                        )
+                    );
+                ?></textarea>
+            </details>
         <?php endif; ?>
     </section>
 </div>

@@ -1,19 +1,21 @@
 # Gravity Flow Inbox Observation Evidence Boundary
 
-This batch adds reusable host diagnostics, not application workflow logic.
+This capability adds reusable host diagnostics, not application workflow logic.
 
 ## Supported host seam
 
-Deep Diagnostics observes the documented Gravity Flow `gravityflow_columns_inbox_table` filter. Gravity Flow documents this filter as applying to both the initial Inbox table and AJAX Inbox refreshes. The observer returns the supplied columns unchanged and ignores host arguments for persisted evidence.
+Deep Diagnostics observes documented Gravity Flow Inbox extension seams and returns supplied host values unchanged. The server-side row/render observer does not persist host business data. The later authentic-host repair also admits candidate-linked native Gravity Flow REST Live Data Refresh samples through the same bounded diagnostic session; it does not turn DEEP into a generalized AJAX/REST/network recorder.
 
 ## Bounded evidence
 
-An authorized operator explicitly starts one observation window from Tools → Deep Diagnostics. The session lasts at most 15 minutes and stores at most 20 observed Inbox-request samples. Samples contain only request transport, server-side elapsed time, memory peak, database query count when observable, hook identity, hook-call count, and observation timestamp.
+An authorized operator explicitly starts one observation window from Tools → Deep Diagnostics. The session lasts at most 15 minutes and stores at most 20 observed Inbox-request samples. Samples contain only bounded technical metadata such as request transport, server-side elapsed time, memory/query counts when observable, opaque candidate/sample references, and observation timestamps.
 
-The observer does not persist form IDs, entry IDs, users, field values, request payloads, or Gravity Flow hook arguments. Session persistence uses the existing `WDDTF\Diagnostics\SessionStore`, which applies the centralized `WDDTF\Privacy\Redactor` before writing transient state.
+The observer does not persist form IDs, entry IDs, users, field values, request/response bodies, cookies, or arbitrary Gravity Flow hook arguments. Session persistence uses the existing `WDDTF\Diagnostics\SessionStore`, which applies the centralized `WDDTF\Privacy\Redactor` before writing transient state.
 
 ## Claim ceiling
 
-Repository CI can prove Deep Diagnostics behavior around the documented extension seam by using a CI-only fixture that fires the same public filter through a real WordPress `admin-ajax.php` request. That is not an authentic licensed Gravity Flow runtime. A real Gravity Forms / Gravity Flow package execution remains required before claiming host-version-specific integration qualification.
+Public repository CI proves Deep Diagnostics behavior around modeled/documented host seams using proprietary-free fixtures in disposable WordPress runtimes. Those fixture runs are not themselves authentic commercial Gravity Flow execution.
 
-The evidence also does not measure browser/network round trip, user-perceived refresh completion, production-load overhead, or root cause. It does not enable ordinary AJAX/REST report finalization and it does not contain SRWF-specific business logic.
+Separately, PR #9 completed an Owner-authorized authentic reference qualification with Gravity Forms 3.1.1.1, Gravity Flow 3.1.0, WordPress 6.5, PHP 8.1.34, and Chromium. In that exact scenario, the real workflow ran and the expected synthetic Entry independently became visible in the assigned operator's real Gravity Flow Inbox through native Live Data Refresh. Deep Diagnostics' own browser metadata deliberately remained narrower: `entry_visible_to_user_proven` stayed `false`, and the visibility proof came from the independent browser assertion.
+
+That qualification does not prove all Gravity versions, current-WordPress commercial runtime, tokenized/unauthenticated assignee contexts, SRWF-specific behavior, production load/performance, notification/feed timing, Gravity View/Perks, or generalized AJAX/REST/network tracing. The bounded evidence also does not by itself establish root cause.

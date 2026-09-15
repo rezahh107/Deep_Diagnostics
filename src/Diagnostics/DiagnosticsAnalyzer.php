@@ -58,6 +58,8 @@ final class DiagnosticsAnalyzer {
             static fn(array $left, array $right): int => ($right['duration'] ?? 0) <=> ($left['duration'] ?? 0)
         );
 
+        // Retain the original heuristic ranking for existing report consumers. It is no
+        // longer the user-facing causal authority; the additive synthesis below is.
         $autoloadScore = 10;
 
         if ( $autoloadSize > 2000000 ) {
@@ -98,6 +100,10 @@ final class DiagnosticsAnalyzer {
             static fn(array $left, array $right): int => $right['score'] <=> $left['score']
         );
 
+        $synthesis = ( new CausalSynthesis() )->synthesize($snapshot);
+        $llmBundle = $snapshot;
+        $llmBundle['synthesis'] = $synthesis;
+
         return [
             'meta'            => $snapshot['meta'],
             'layers'          => [
@@ -114,6 +120,7 @@ final class DiagnosticsAnalyzer {
                 'cron'     => $snapshot['cron'] ?? [],
                 'gravity'  => $snapshot['gravity'] ?? [],
             ],
+            'synthesis'       => $synthesis,
             'bottlenecks'     => $bottlenecks,
             'recommendations' => $recommendations,
             'top_offenders'   => [
@@ -122,7 +129,7 @@ final class DiagnosticsAnalyzer {
                 'slowest_queries' => $snapshot['queries']['queries'] ?? [],
                 'heaviest_assets' => $snapshot['assets']['heavy'] ?? [],
             ],
-            'llm_bundle'       => $snapshot,
+            'llm_bundle'       => $llmBundle,
         ];
     }
 }
