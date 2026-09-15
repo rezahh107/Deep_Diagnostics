@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use WDDTF\Diagnostics\Manager;
 use WDDTF\Diagnostics\SessionStore;
 use WDDTF\Gravity\GravityDiagnostics;
 
@@ -128,11 +129,14 @@ final class GravityDiagnosticsTest extends TestCase {
         self::assertCount(20, $after['samples']);
     }
 
-    public function test_host_snapshot_reports_privacy_safe_gravity_forms_version_without_collecting_business_data(): void {
-        $hosts = $this->makeDiagnostics()->snapshot()['hosts'];
+    public function test_host_snapshot_uses_privacy_safe_version_label_and_manager_presents_version_after_redaction(): void {
+        $diagnostics = $this->makeDiagnostics();
+        $hosts = $diagnostics->snapshot()['hosts'];
+        $presented = (new Manager(null, $diagnostics))->getGravityDiagnostics()['hosts'];
 
         self::assertTrue($hosts['gravity_forms']['available']);
         self::assertSame('v3.1.1.1', $hosts['gravity_forms']['version']);
+        self::assertSame('3.1.1.1', $presented['gravity_forms']['version']);
         self::assertTrue($hosts['gravity_flow']['available']);
     }
 
