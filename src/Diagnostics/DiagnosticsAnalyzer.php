@@ -112,6 +112,7 @@ final class DiagnosticsAnalyzer {
                 ],
                 'assets'   => $snapshot['assets']['heavy'] ?? [],
                 'cron'     => $snapshot['cron'] ?? [],
+                'gravity'  => $snapshot['gravity'] ?? [],
             ],
             'bottlenecks'     => $bottlenecks,
             'recommendations' => $recommendations,
