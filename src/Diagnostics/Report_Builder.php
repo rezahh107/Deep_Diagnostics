@@ -22,6 +22,7 @@ final class Report_Builder {
         $inboxObservation = $gravity['inbox_observation'] ?? [];
         $traces = is_array($inboxObservation['traces'] ?? null) ? $inboxObservation['traces'] : [];
         $gravityAnalysis = $inboxObservation['analysis'] ?? [];
+        $gravityIntegrity = $inboxObservation['integrity'] ?? [];
 
         $lines = [
             '# WP Deep Diagnostics Report',
@@ -62,6 +63,8 @@ final class Report_Builder {
         $lines[] = '- ' . __('Diagnostic status', 'wp-deep-diagnostics') . ': ' . ($inboxObservation['status'] ?? 'not_started');
         $lines[] = '- ' . __('Candidate traces', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['trace_count'] ?? 0);
         $lines[] = '- ' . __('Session analysis', 'wp-deep-diagnostics') . ': ' . ($gravityAnalysis['classification'] ?? 'ENTRY_NOT_OBSERVED');
+        $lines[] = '- ' . __('Session integrity uncertainty', 'wp-deep-diagnostics') . ': ' . (! empty($gravityIntegrity['uncertain']) ? 'yes' : 'no');
+        $lines[] = '- ' . __('Session integrity reason', 'wp-deep-diagnostics') . ': ' . ($gravityIntegrity['reason'] ?? 'n/a');
         $lines[] = '- ' . __('Inbox samples observed', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['sample_count_total'] ?? 0);
         $lines[] = '- ' . __('AJAX Inbox samples observed', 'wp-deep-diagnostics') . ': ' . (int) ($inboxObservation['ajax_sample_count'] ?? 0);
         $lines[] = '- ' . __('Gravity evidence', 'wp-deep-diagnostics') . ': ' . wp_json_encode($inboxObservation['evidence'] ?? []);
@@ -73,6 +76,8 @@ final class Report_Builder {
             $lines[] = '- ' . __('Form reference', 'wp-deep-diagnostics') . ': ' . ($trace['form_ref'] ?? 'n/a');
             $lines[] = '- ' . __('First inconsistent point', 'wp-deep-diagnostics') . ': ' . ($trace['analysis']['classification'] ?? 'INSUFFICIENT_EVIDENCE');
             $lines[] = '- ' . __('Analysis reason', 'wp-deep-diagnostics') . ': ' . ($trace['analysis']['reason'] ?? 'unknown');
+            $lines[] = '- ' . __('Complete retained history', 'wp-deep-diagnostics') . ': ' . (! empty($trace['analysis']['complete_history']) ? 'yes' : 'no');
+            $lines[] = '- ' . __('Events truncated', 'wp-deep-diagnostics') . ': ' . (! empty($trace['analysis']['events_truncated']) ? 'yes' : 'no');
             $lines[] = '- ' . __('Proven facts', 'wp-deep-diagnostics') . ': ' . wp_json_encode($trace['analysis']['proven'] ?? []);
             $lines[] = '- ' . __('Unresolved facts', 'wp-deep-diagnostics') . ': ' . wp_json_encode($trace['analysis']['unknowns'] ?? []);
 
