@@ -95,6 +95,23 @@ final class GravityBrowserTimingRepairTest extends TestCase {
         self::assertStringContainsString('ui_signal: classifyUiSignal(responseBaseline)', $scheduleBlock);
     }
 
+    public function test_fetch_observer_admits_only_server_tagged_responses_without_content_or_url_inspection(): void {
+        $source = (string) file_get_contents(dirname(__DIR__) . '/assets/gravity-browser-observer.js');
+        $fetchStart = strpos($source, "if (typeof window.fetch === 'function')");
+        $prefilter = strpos($source, '$.ajaxPrefilter(function');
+
+        self::assertIsInt($fetchStart);
+        self::assertIsInt($prefilter);
+        $fetchBlock = substr($source, $fetchStart, $prefilter - $fetchStart);
+        self::assertStringContainsString('var nativeFetch = window.fetch.bind(window);', $fetchBlock);
+        self::assertStringContainsString('return nativeFetch.apply(window, arguments).then(function (response)', $fetchBlock);
+        self::assertStringContainsString('response.headers.get(config.headerName)', $fetchBlock);
+        self::assertStringContainsString('scheduleTaggedEvidence(', $fetchBlock);
+        self::assertStringNotContainsString('.url', $fetchBlock);
+        self::assertStringNotContainsString('response.text', $fetchBlock);
+        self::assertStringNotContainsString('response.json', $fetchBlock);
+    }
+
     public function test_cron_truncation_markup_has_no_unmatched_wrapper_close(): void {
         $template = (string) file_get_contents(dirname(__DIR__) . '/templates/admin-page.php');
         $description = "The displayed event list is bounded and truncated; the total count above includes all ready event instances observed.";

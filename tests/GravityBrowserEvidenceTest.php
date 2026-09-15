@@ -186,6 +186,64 @@ final class GravityBrowserEvidenceTest extends TestCase {
      * @runInSeparateProcess
      * @preserveGlobalState disabled
      */
+    public function test_candidate_linked_rest_refresh_accepts_validated_logged_in_cookie_when_rest_context_has_no_current_user(): void {
+        $now = 1000;
+        $headers = [];
+        $diagnostics = $this->makeDiagnostics($now, $headers);
+        $diagnostics->startDiagnostic();
+        $this->seedPositiveServerChain($diagnostics, 812, 91);
+
+        $GLOBALS['wddtf_test_logged_in'] = false;
+        $GLOBALS['wddtf_test_capabilities']['gravityflow_inbox'] = false;
+        $GLOBALS['wddtf_test_validated_cookie_user'] = 77;
+        $GLOBALS['wddtf_test_user_capabilities'][77]['gravityflow_inbox'] = true;
+
+        define('REST_REQUEST', true);
+        $diagnostics->observeInboxRender([], []);
+        $diagnostics->observeInboxFieldValue('row-value', 91, 5, ['id' => 812, 'form_id' => 91]);
+        $diagnostics->persistObservedInboxRequest();
+
+        self::assertCount(1, $headers);
+        $observation = $diagnostics->currentInboxObservation();
+        self::assertSame('rest', $observation['samples'][0]['transport']);
+        self::assertSame($headers[0][1], $observation['samples'][0]['sample_ref']);
+
+        // Evidence writes retain the normal authenticated Inbox capability + session nonce boundary.
+        $this->authorizeInboxOperator();
+        $response = $this->postBrowserEvidence($diagnostics, $observation['session_id'], $headers[0][1]);
+        self::assertTrue($response->success);
+        self::assertSame(1, $diagnostics->currentInboxObservation()['browser_evidence_count']);
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function test_candidate_linked_rest_refresh_without_validated_inbox_cookie_is_not_tagged(): void {
+        $now = 1000;
+        $headers = [];
+        $diagnostics = $this->makeDiagnostics($now, $headers);
+        $diagnostics->startDiagnostic();
+        $this->seedPositiveServerChain($diagnostics, 812, 91);
+        $GLOBALS['wddtf_test_logged_in'] = false;
+        $GLOBALS['wddtf_test_validated_cookie_user'] = false;
+
+        define('REST_REQUEST', true);
+        $diagnostics->observeInboxRender([], []);
+        $diagnostics->observeInboxFieldValue('row-value', 91, 5, ['id' => 812, 'form_id' => 91]);
+        $diagnostics->persistObservedInboxRequest();
+
+        self::assertSame([], $headers);
+        $observation = $diagnostics->currentInboxObservation();
+        self::assertSame('rest', $observation['samples'][0]['transport']);
+        self::assertNull($observation['samples'][0]['sample_ref']);
+        self::assertSame('BROWSER_EVIDENCE_INSUFFICIENT', $observation['browser_analysis']['classification']);
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
     public function test_unrelated_rest_never_becomes_server_or_browser_evidence(): void {
         $now = 1000;
         $headers = [];
