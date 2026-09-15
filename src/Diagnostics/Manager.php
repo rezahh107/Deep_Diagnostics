@@ -116,7 +116,9 @@ final class Manager {
     }
 
     public function getGravityDiagnostics(): array {
-        return ( new Redactor() )->redact($this->gravity->snapshot());
+        $gravity = ( new Redactor() )->redact($this->gravity->snapshot());
+
+        return $this->presentGravityHostVersions($gravity);
     }
 
     public function finalize(): void {
@@ -205,5 +207,20 @@ final class Manager {
         $report = get_transient('wddtf_last_report');
 
         return is_array($report) ? $report : [];
+    }
+
+    private function presentGravityHostVersions(array $gravity): array {
+        foreach ( ['gravity_forms', 'gravity_flow'] as $host ) {
+            $version = $gravity['hosts'][$host]['version'] ?? null;
+            if ( ! is_string($version) ) {
+                continue;
+            }
+
+            if ( 1 === preg_match('/^v([0-9]+(?:\.[0-9A-Za-z-]+)+)$/', $version, $matches) ) {
+                $gravity['hosts'][$host]['version'] = $matches[1];
+            }
+        }
+
+        return $gravity;
     }
 }
