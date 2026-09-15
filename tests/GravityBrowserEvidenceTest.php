@@ -169,7 +169,7 @@ final class GravityBrowserEvidenceTest extends TestCase {
         self::assertSame('BROWSER_EVIDENCE_INSUFFICIENT', $observation['browser_analysis']['classification']);
     }
 
-    public function test_forged_sample_ref_and_extra_schema_are_rejected_without_persistence(): void {
+    public function test_forged_sample_nonce_and_client_correlation_fields_are_rejected_without_persistence(): void {
         $now = 1000;
         $headers = [];
         $diagnostics = $this->makeDiagnostics($now, $headers);
@@ -177,6 +177,7 @@ final class GravityBrowserEvidenceTest extends TestCase {
         $diagnostics->startDiagnostic();
         $this->seedTaggedSample($diagnostics, 812, 91);
         $observation = $diagnostics->currentInboxObservation();
+        $sampleRef = $observation['samples'][0]['sample_ref'];
 
         $forged = $this->postBrowserEvidence(
             $diagnostics,
@@ -186,15 +187,27 @@ final class GravityBrowserEvidenceTest extends TestCase {
         self::assertFalse($forged->success);
         self::assertSame(404, $forged->statusCode);
 
-        $sampleRef = $observation['samples'][0]['sample_ref'];
-        $extra = $this->postBrowserEvidence(
+        $badNonce = $this->postBrowserEvidence(
             $diagnostics,
             $observation['session_id'],
             $sampleRef,
-            ['response_body' => 'SecretResponseBodyCanary123456789012345']
+            ['nonce' => 'forged-browser-evidence-nonce']
         );
-        self::assertFalse($extra->success);
-        self::assertSame(400, $extra->statusCode);
+        self::assertFalse($badNonce->success);
+        self::assertSame(403, $badNonce->statusCode);
+
+        $clientCorrelation = $this->postBrowserEvidence(
+            $diagnostics,
+            $observation['session_id'],
+            $sampleRef,
+            [
+                'session_id' => 'ds-aaaaaaaaaaaaaaaa',
+                'trace_ref' => 'gt-aaaaaaaaaaaaaaaa',
+                'response_body' => 'SecretResponseBodyCanary123456789012345',
+            ]
+        );
+        self::assertFalse($clientCorrelation->success);
+        self::assertSame(400, $clientCorrelation->statusCode);
         self::assertSame(0, $diagnostics->currentInboxObservation()['browser_evidence_count']);
     }
 
