@@ -49,34 +49,19 @@
         return 'none';
     }
 
-    function observeCompletion(xhr) {
-        var requestState = requests && requests.has(xhr) ? requests.get(xhr) : null;
-        if (requests && requests.has(xhr)) {
-            requests.delete(xhr);
-        }
-
-        var sampleRef = '';
-        try {
-            sampleRef = xhr.getResponseHeader(config.headerName) || '';
-        } catch (_error) {
-            return;
-        }
-
+    function scheduleTaggedEvidence(sampleRef, status, outcome, startedAt, finishedAt) {
         if (!/^gb-[a-f0-9]{20}$/.test(sampleRef)) {
             return;
         }
 
-        var finishedAt = performanceNow();
-        var duration = requestState && requestState.startedAt !== null && finishedAt !== null
-            ? Math.max(0, finishedAt - requestState.startedAt)
+        var duration = startedAt !== null && finishedAt !== null
+            ? Math.max(0, finishedAt - startedAt)
             : null;
         var clientReceivedMs = Date.now();
         var responseBaseline = {
             mutationSequence: mutationSequence,
             title: document.title
         };
-        var status = typeof xhr.status === 'number' ? xhr.status : 0;
-        var outcome = status >= 200 && status < 400 ? 'success' : 'error';
 
         window.setTimeout(function () {
             var payload = {
@@ -100,6 +85,63 @@
                 dataType: 'json'
             });
         }, Math.max(0, Math.min(500, Number(config.uiObservationWindowMs) || 0)));
+    }
+
+    function observeCompletion(xhr) {
+        var requestState = requests && requests.has(xhr) ? requests.get(xhr) : null;
+        if (requests && requests.has(xhr)) {
+            requests.delete(xhr);
+        }
+
+        var sampleRef = '';
+        try {
+            sampleRef = xhr.getResponseHeader(config.headerName) || '';
+        } catch (_error) {
+            return;
+        }
+
+        var finishedAt = performanceNow();
+        var status = typeof xhr.status === 'number' ? xhr.status : 0;
+        scheduleTaggedEvidence(
+            sampleRef,
+            status,
+            status >= 200 && status < 400 ? 'success' : 'error',
+            requestState ? requestState.startedAt : null,
+            finishedAt
+        );
+    }
+
+    // Gravity Flow 3.1.0 performs Inbox Live Data Refresh with window.fetch().
+    // Observe only responses explicitly tagged by DEEP's bounded server-side
+    // candidate correlation; do not inspect request URLs, bodies or response content.
+    if (typeof window.fetch === 'function') {
+        var nativeFetch = window.fetch.bind(window);
+        window.fetch = function () {
+            var startedAt = performanceNow();
+            return nativeFetch.apply(window, arguments).then(function (response) {
+                var sampleRef = '';
+                try {
+                    sampleRef = response && response.headers && typeof response.headers.get === 'function'
+                        ? (response.headers.get(config.headerName) || '')
+                        : '';
+                } catch (_error) {
+                    return response;
+                }
+
+                if (/^gb-[a-f0-9]{20}$/.test(sampleRef)) {
+                    var finishedAt = performanceNow();
+                    var status = response && typeof response.status === 'number' ? response.status : 0;
+                    scheduleTaggedEvidence(
+                        sampleRef,
+                        status,
+                        status >= 200 && status < 400 ? 'success' : 'error',
+                        startedAt,
+                        finishedAt
+                    );
+                }
+                return response;
+            });
+        };
     }
 
     $.ajaxPrefilter(function (_options, _originalOptions, jqXHR) {
