@@ -110,14 +110,18 @@ jobs:
             exit 1
           fi
 
-          php ../tests/performance/benchmark.php \
+          if ! php ../tests/performance/benchmark.php \
             --wordpress-dir="$PWD" \
             --base-url=http://127.0.0.1:8080 \
             --samples=15 \
             --warmups=1 \
             --git-sha="$BENCHMARK_SHA" \
             --output=../artifacts/performance-overhead.json \
-            --summary=../artifacts/performance-overhead.md
+            --summary=../artifacts/performance-overhead.md; then
+            echo '--- PHP server log after benchmark failure ---' >&2
+            cat /tmp/wddtf-performance-server.log >&2 || true
+            exit 1
+          fi
 
           kill "$server_pid" 2>/dev/null || true
           wait "$server_pid" 2>/dev/null || true
