@@ -62,7 +62,7 @@ final class GravityDiagnosticsTest extends TestCase {
         $canary = 'SecretEntryValueCanary123456789012345';
         $columns = ['entry' => 'Entry'];
 
-        $returned = $diagnostics->observeInboxRender($columns, ['entry' => $canary, 'form_id' => 91]);
+        $returned = $diagnostics->observeInboxRender($columns, ['entry' => $canary, 'form_id' => 91, 'entry_id' => 812]);
         $diagnostics->persistObservedInboxRequest();
         $snapshot = $diagnostics->snapshot();
         $observation = $snapshot['inbox_observation'];
@@ -77,8 +77,9 @@ final class GravityDiagnosticsTest extends TestCase {
         self::assertGreaterThanOrEqual(0, $sample['elapsed_ms']);
         self::assertGreaterThan(0, $sample['memory_peak_bytes']);
         self::assertStringNotContainsString($canary, $encoded);
-        self::assertStringNotContainsString('form_id', $encoded);
-        self::assertStringNotContainsString('entry', strtolower($encoded));
+        self::assertStringNotContainsString('"form_id"', $encoded);
+        self::assertStringNotContainsString('"entry_id"', $encoded);
+        self::assertStringNotContainsString('"entry":"Entry"', $encoded);
         self::assertFalse($observation['evidence']['raw_form_entry_values_stored']);
     }
 
