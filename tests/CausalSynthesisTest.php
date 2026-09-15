@@ -89,12 +89,16 @@ final class CausalSynthesisTest extends TestCase {
                 ['layer' => 'init', 'data' => ['elapsed_since_prev' => 0.30]],
                 ['layer' => 'wp_loaded', 'data' => ['elapsed_since_prev' => 0.40]],
             ],
+            'queries' => ['warning' => 'SAVEQUERIES disabled. Enable for precise query timing.'],
         ]));
 
         self::assertSame('observed_boundary', $report['synthesis']['status']);
+        self::assertSame('slow_lifecycle_boundary', $report['synthesis']['findings'][0]['id']);
+        self::assertSame(['slow_lifecycle_boundary'], $report['synthesis']['strongest_finding_ids']);
         $finding = $this->finding($report, 'slow_lifecycle_boundary');
         self::assertSame('init', $finding['evidence']['end_boundary']);
         self::assertStringContainsString('does not attribute', $finding['claim_ceiling']);
+        self::assertSame('unknown', $this->finding($report, 'database_timing_unavailable')['strength']);
     }
 
     public function test_multiple_simultaneous_measured_signals_are_not_forced_into_one_culprit(): void {
