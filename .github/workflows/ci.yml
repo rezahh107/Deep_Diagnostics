@@ -245,14 +245,30 @@ jobs:
             delete_transient("wddtf_cron_qualification_current");
             wp_clear_scheduled_hook(\WDDTF\Cron\CronDiagnostics::PROBE_HOOK);
           '
-          # WP-CLI does not provide a stable non-zero process status for every wp_die()
-          # path. The contract under test is that a GET cannot create the probe.
           wp eval '
+            add_filter(
+                "wp_die_handler",
+                static fn(): callable => static function(mixed $message): void {
+                    throw new RuntimeException((string) $message);
+                },
+                PHP_INT_MAX
+            );
             $_SERVER["REQUEST_METHOD"] = "GET";
             $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_run_cron_qualification");
-            (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->runCronQualification();
-          ' --user=admin || true
-          test "$(wp cron event list --field=hook | grep -xc 'wddtf_cron_qualification_probe' || true)" -eq 0
+            $rejected = false;
+            try {
+                (new \WDDTF\Admin\Admin_Page(new \WDDTF\Diagnostics\Manager()))->runCronQualification();
+            } catch (RuntimeException $exception) {
+                $rejected = true;
+            }
+            if (!$rejected) {
+                fwrite(STDERR, "GET request was not rejected\n"); exit(1);
+            }
+            if (false !== wp_get_scheduled_event(\WDDTF\Cron\CronDiagnostics::PROBE_HOOK)) {
+                fwrite(STDERR, "GET request created a probe\n"); exit(1);
+            }
+            echo "admin GET rejection boundary ok\n";
+          ' --user=admin
           wp eval '
             $_SERVER["REQUEST_METHOD"] = "POST";
             $_REQUEST["_wpnonce"] = wp_create_nonce("wddtf_run_cron_qualification");
