@@ -31,6 +31,10 @@ def run(*args: str, cwd: Path | None = None) -> str:
     return completed.stdout.strip()
 
 
+def wp(wp_path: Path, *args: str) -> str:
+    return run("wp", *args, cwd=wp_path)
+
+
 def percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     if not ordered:
@@ -108,16 +112,17 @@ def login(base_url: str, username: str, password: str) -> urllib.request.OpenerD
 
 def ensure_plugin_state(wp_path: Path, active: bool) -> None:
     completed = subprocess.run(
-        ["wp", "plugin", "is-active", "wp-deep-diagnostics", "--path", str(wp_path)],
+        ["wp", "plugin", "is-active", "wp-deep-diagnostics"],
+        cwd=str(wp_path),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         text=True,
     )
     if (completed.returncode == 0) != active:
         if active:
-            run("wp", "plugin", "activate", "wp-deep-diagnostics", "--quiet", "--path", str(wp_path))
+            wp(wp_path, "plugin", "activate", "wp-deep-diagnostics", "--quiet")
         else:
-            run("wp", "plugin", "deactivate", "wp-deep-diagnostics", "--quiet", "--path", str(wp_path))
+            wp(wp_path, "plugin", "deactivate", "wp-deep-diagnostics", "--quiet")
 
 
 def metric_values(samples: list[dict[str, Any]], key: str) -> list[float]:
@@ -286,10 +291,10 @@ def main() -> int:
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "environment": {
-            "wordpress": run("wp", "core", "version", "--path", str(args.wp_path)),
-            "php": run("wp", "eval", "echo PHP_VERSION;", "--path", str(args.wp_path)),
-            "database": run("wp", "eval", 'global $wpdb; echo $wpdb->get_var("SELECT VERSION()");', "--path", str(args.wp_path)),
-            "deep_diagnostics": run("wp", "plugin", "get", "wp-deep-diagnostics", "--field=version", "--path", str(args.wp_path)),
+            "wordpress": wp(args.wp_path, "core", "version"),
+            "php": wp(args.wp_path, "eval", "echo PHP_VERSION;"),
+            "database": wp(args.wp_path, "eval", 'global $wpdb; echo $wpdb->get_var("SELECT VERSION()");'),
+            "deep_diagnostics": wp(args.wp_path, "plugin", "get", "wp-deep-diagnostics", "--field=version"),
             "runner_os": os.environ.get("RUNNER_OS", "unknown"),
             "php_sapi": "cli-server",
         },
