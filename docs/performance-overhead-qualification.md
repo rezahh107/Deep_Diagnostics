@@ -8,9 +8,9 @@ The canonical CI job uses one disposable WordPress 6.5 / PHP 8.1 / MySQL 8 runti
 
 The three canonical scenarios are:
 
-1. **Normal anonymous frontend** — the installed site's normal front page.
+1. **Normal anonymous frontend** — the installed site's normal front page with no authenticated cookie jar.
 2. **Normal authenticated wp-admin** — the normal Dashboard request using one already-authenticated administrator session.
-3. **Bounded diagnostic workload** — a CI/local-only Tools page supplied by the benchmark probe. It performs a fixed set of local WordPress database reads and enqueues a bounded set of local assets so existing collection/finalization work has deterministic material to inspect. It makes no public-network request.
+3. **Bounded diagnostic workload** — a CI/local-only Tools page supplied by the benchmark probe. It performs a fixed set of local WordPress database reads and enqueues a bounded set of local WordPress assets so existing collection/finalization work has deterministic material to inspect. It makes no public-network request.
 
 `SAVEQUERIES` is intentionally **off** in this baseline. Database-query count comes from `wpdb->num_queries`, so the generic cost of WordPress query timing is not attributed to Deep Diagnostics. If a later qualification enables `SAVEQUERIES`, that must be a separate named scenario/result.
 
@@ -18,15 +18,22 @@ External HTTP is blocked in the disposable runtime with `WP_HTTP_BLOCK_EXTERNAL=
 
 ## Lifecycle / timing boundary
 
-The primary time measurement is external to WordPress: the benchmark driver measures monotonic wall time around the HTTP client request. It does not use `report.meta.elapsed_ms` as the primary overhead measure.
+The benchmark deliberately records two external timing boundaries rather than assuming that HTTP response completion means PHP request completion:
 
-A test-only must-use plugin records a late-shutdown boundary at WordPress `shutdown` priority `9998` and a post-shutdown marker at `PHP_INT_MAX`. Deep Diagnostics currently finalizes its normal report at `shutdown` priority `9999`, so the active late-shutdown interval includes the real `Manager::finalize()` path: collector snapshots, centralized redaction, diagnostics analysis / causal synthesis, JSON and Markdown generation, file persistence, and transient persistence, plus any later shutdown work in the disposable runtime.
+- **response wall time** — monotonic time around the external cURL request until the client has received the response;
+- **full lifecycle wall time** — monotonic time from request start until a post-finalize shutdown marker is externally observable. This is the canonical total-overhead measure.
 
-The benchmark treats client timing as valid only when the post-shutdown marker file is already observable immediately when the external client returns. If that condition is false, the job fails instead of silently excluding post-response work.
+A test-only must-use plugin records a late-shutdown boundary at WordPress `shutdown` priority `9998` and writes the completion marker at `PHP_INT_MAX`. Deep Diagnostics currently finalizes its normal report at `shutdown` priority `9999`, so the active late-shutdown interval includes the real `Manager::finalize()` path: collector snapshots, centralized redaction, diagnostics analysis / causal synthesis, JSON and Markdown generation, file persistence, and transient persistence, plus later WordPress shutdown hooks before the marker.
+
+The disposable PHP server can make a response visible before all shutdown work finishes. The benchmark therefore does **not** discard that case. After response completion it waits for the marker, polling every 250 microseconds with a five-second validity timeout, and records that interval separately as `post_response_ms`. The polling interval is a detection mechanism, not synthetic workload; its small observation latency is explicitly a caveat and no sub-millisecond precision is claimed from it.
+
+If the marker never appears within the bounded timeout, the run fails as invalid instead of silently omitting finalization cost.
 
 The probe is deliberately small and identical in control and active states. It records:
 
-- external request wall-clock time;
+- full lifecycle external wall-clock time;
+- HTTP response wall-clock time;
+- externally observed post-response completion interval;
 - PHP request peak memory;
 - `wpdb->num_queries` at the post-shutdown boundary;
 - late-shutdown duration around finalization;
@@ -42,7 +49,7 @@ The machine-readable result records this policy and the runtime's opcache CLI st
 
 ## Statistics and validity
 
-The canonical CI job currently records 15 matched pairs per scenario. Raw samples are retained in the artifact. Summaries include median, 25th/75th percentiles, minimum, and maximum for each state, together with active-minus-control and paired active-minus-control deltas.
+The canonical CI job records 15 matched pairs per scenario. Raw samples are retained in the artifact. Summaries include median, 25th/75th percentiles, minimum, and maximum for each state, together with active-minus-control and paired active-minus-control deltas.
 
 A benchmark run is blocking when qualification itself is invalid, including:
 
@@ -50,8 +57,8 @@ A benchmark run is blocking when qualification itself is invalid, including:
 - the expected Deep Diagnostics active/inactive state is not the state actually observed;
 - a control/active pair is missing or duplicated;
 - the required sample count is incomplete;
-- memory/query/shutdown metrics are malformed;
-- the post-shutdown marker is not observable before client completion;
+- timing/memory/query/shutdown metrics are malformed;
+- the post-shutdown marker does not appear within the bounded validity timeout;
 - the output contract cannot be produced.
 
 There is intentionally **no numeric overhead threshold** in this first characterization system. A later Owner decision can set a budget using collected evidence rather than an invented number.

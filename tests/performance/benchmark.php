@@ -102,7 +102,7 @@ function cleanProductReports(string $wordpressDir): void {
     }
 }
 
-/** @return array{body:string,http_code:int,effective_url:string,wall_ms:float} */
+/** @return array{body:string,http_code:int,effective_url:string,response_wall_ms:float,started_ns:int,response_ended_ns:int} */
 function httpRequest(string $url, ?string $cookieJar, ?array $postFields = null): array {
     $handle = curl_init($url);
     if ( false === $handle ) {
@@ -130,9 +130,9 @@ function httpRequest(string $url, ?string $cookieJar, ?array $postFields = null)
         curl_setopt($handle, CURLOPT_POSTFIELDS, http_build_query($postFields, '', '&', PHP_QUERY_RFC3986));
     }
 
-    $started = hrtime(true);
+    $startedNs = hrtime(true);
     $body = curl_exec($handle);
-    $ended = hrtime(true);
+    $responseEndedNs = hrtime(true);
 
     if ( false === $body ) {
         $error = curl_error($handle);
@@ -141,10 +141,12 @@ function httpRequest(string $url, ?string $cookieJar, ?array $postFields = null)
     }
 
     $result = [
-        'body'          => (string) $body,
-        'http_code'     => (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE),
-        'effective_url' => (string) curl_getinfo($handle, CURLINFO_EFFECTIVE_URL),
-        'wall_ms'       => round(($ended - $started) / 1_000_000, 3),
+        'body'              => (string) $body,
+        'http_code'         => (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE),
+        'effective_url'     => (string) curl_getinfo($handle, CURLINFO_EFFECTIVE_URL),
+        'response_wall_ms'  => round(($responseEndedNs - $startedNs) / 1_000_000, 3),
+        'started_ns'        => $startedNs,
+        'response_ended_ns' => $responseEndedNs,
     ];
     curl_close($handle);
 
@@ -171,6 +173,24 @@ function loginAdmin(string $baseUrl, string $cookieJar): void {
     }
 }
 
+function waitForProbeMarker(string $metricPath, int $timeoutMs = 5000): int {
+    $deadlineNs = hrtime(true) + ($timeoutMs * 1_000_000);
+
+    do {
+        clearstatcache(true, $metricPath);
+        if ( is_file($metricPath) ) {
+            return hrtime(true);
+        }
+
+        // This is completion polling, not synthetic workload/timing. The measured request
+        // runs in the independent PHP server process; polling only observes when its
+        // post-shutdown marker becomes visible.
+        usleep(250);
+    } while ( hrtime(true) < $deadlineNs );
+
+    throw new RuntimeException('Post-shutdown benchmark marker did not appear within the validity timeout.');
+}
+
 /** @return array<string,mixed> */
 function measuredRequest(
     string $baseUrl,
@@ -187,7 +207,6 @@ function measuredRequest(
     @unlink($metricPath);
 
     $response = httpRequest($url, $cookieJar);
-    clearstatcache(true, $metricPath);
 
     if ( 200 !== $response['http_code'] ) {
         throw new RuntimeException("Benchmark request {$sampleId} returned HTTP {$response['http_code']}.");
@@ -196,16 +215,16 @@ function measuredRequest(
         throw new RuntimeException("Benchmark request {$sampleId} lost authenticated wp-admin context.");
     }
 
-    // Validity boundary: the post-finalize benchmark probe runs at shutdown/PHP_INT_MAX.
-    // If its file is not already visible when the external client returns, client timing
-    // cannot truthfully be claimed to include late shutdown/finalization work.
-    if ( ! is_file($metricPath) ) {
-        throw new RuntimeException(
-            "Benchmark request {$sampleId} returned before the post-shutdown marker was observable; wall time is invalid."
-        );
-    }
+    // Some SAPIs/servers can make the response visible before PHP shutdown work completes.
+    // Preserve both boundaries: client response time and external observation of the
+    // post-finalize marker. The latter is the canonical full-lifecycle wall measurement.
+    $lifecycleEndedNs = waitForProbeMarker($metricPath);
+    $lifecycleWallMs = round(($lifecycleEndedNs - $response['started_ns']) / 1_000_000, 3);
+    $postResponseMs = round(max(0, $lifecycleEndedNs - $response['response_ended_ns']) / 1_000_000, 3);
 
     $decoded = json_decode((string) file_get_contents($metricPath), true, 512, JSON_THROW_ON_ERROR);
+    @unlink($metricPath);
+
     if ( ! is_array($decoded) || ($decoded['sample_id'] ?? null) !== $sampleId ) {
         throw new RuntimeException("Benchmark probe output for {$sampleId} is malformed.");
     }
@@ -220,7 +239,9 @@ function measuredRequest(
     }
 
     return [
-        'wall_ms'           => $response['wall_ms'],
+        'lifecycle_wall_ms' => $lifecycleWallMs,
+        'response_wall_ms'  => $response['response_wall_ms'],
+        'post_response_ms'  => $postResponseMs,
         'peak_memory_bytes' => $decoded['peak_memory_bytes'],
         'db_query_count'    => $decoded['db_query_count'],
         'late_shutdown_ms'  => (float) $decoded['late_shutdown_ms'],
@@ -300,7 +321,9 @@ try {
                     'scenario'          => $scenarioId,
                     'state'             => $state,
                     'pair'              => $pair,
-                    'wall_ms'           => $metrics['wall_ms'],
+                    'lifecycle_wall_ms' => $metrics['lifecycle_wall_ms'],
+                    'response_wall_ms'  => $metrics['response_wall_ms'],
+                    'post_response_ms'  => $metrics['post_response_ms'],
                     'peak_memory_bytes' => $metrics['peak_memory_bytes'],
                     'db_query_count'    => $metrics['db_query_count'],
                     'late_shutdown_ms'  => $metrics['late_shutdown_ms'],
@@ -351,8 +374,10 @@ try {
             'measured_pairs_per_scenario' => $samples,
             'warmups_before_each_state_sample' => $warmups,
             'pair_order' => 'odd pairs control-active; even pairs active-control',
-            'wall_clock' => 'external PHP cURL client monotonic time; validity requires post-shutdown probe marker to exist before client completion',
-            'late_shutdown' => 'shutdown action priority 9998 through PHP_INT_MAX; active path includes Manager::finalize() at shutdown priority 9999 plus any later shutdown work',
+            'lifecycle_wall_clock' => 'external monotonic time from request start until the post-finalize shutdown marker is observed; canonical total-overhead measure',
+            'response_wall_clock' => 'external PHP cURL client monotonic time until the HTTP response completes; may exclude post-response shutdown work',
+            'post_response' => 'external time between client response completion and observation of the post-finalize marker; marker polled every 250 microseconds with a 5 second validity timeout',
+            'late_shutdown' => 'shutdown action priority 9998 through PHP_INT_MAX; active path includes Manager::finalize() at shutdown priority 9999 plus later WordPress shutdown hooks',
             'memory' => 'PHP request peak real memory at post-shutdown probe',
             'database_queries' => 'wpdb->num_queries at post-shutdown probe; does not require SAVEQUERIES',
             'report_history_policy' => 'report-* files removed outside measured requests after warm-up so samples measure a warm report directory without accumulating benchmark history',
@@ -362,6 +387,7 @@ try {
             'No numeric performance acceptance threshold is enforced in this characterization batch.',
             'Disposable WordPress/GitHub-hosted-runner evidence is not universal production overhead proof.',
             'SAVEQUERIES is not enabled in the canonical baseline; its generic WordPress cost is therefore not attributed to Deep Diagnostics.',
+            'The post-response measurement includes marker-observation polling latency and is not presented with sub-millisecond statistical precision.',
             'The late-shutdown metric is a narrow phase boundary around Deep finalization, not a generic profiler trace.',
         ],
     ];
@@ -382,28 +408,32 @@ try {
         $warmups
     );
     $markdown[] = '';
-    $markdown[] = '| Scenario | Wall control median (range), ms | Wall active median (range), ms | Paired wall delta median [p25–p75], ms | Peak-memory paired delta median, MiB | DB-query paired delta median | Late-shutdown paired delta median, ms |';
-    $markdown[] = '| --- | ---: | ---: | ---: | ---: | ---: | ---: |';
+    $markdown[] = '| Scenario | Full lifecycle control median (range), ms | Full lifecycle active median (range), ms | Paired lifecycle delta median [p25–p75], ms | Paired response delta median, ms | Paired post-response delta median, ms | Peak-memory paired delta median, MiB | DB-query paired delta median | Late-shutdown paired delta median, ms |';
+    $markdown[] = '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |';
 
     foreach ( $scenarioOutput as $scenario ) {
         $summary = $scenario['summary'];
-        $wall = $summary['wall_ms'];
+        $lifecycle = $summary['lifecycle_wall_ms'];
+        $response = $summary['response_wall_ms'];
+        $postResponse = $summary['post_response_ms'];
         $memory = $summary['peak_memory_bytes'];
         $queries = $summary['db_query_count'];
         $shutdown = $summary['late_shutdown_ms'];
 
         $markdown[] = sprintf(
-            '| %s | %s (%s–%s) | %s (%s–%s) | %s [%s–%s] | %s | %s | %s |',
+            '| %s | %s (%s–%s) | %s (%s–%s) | %s [%s–%s] | %s | %s | %s | %s | %s |',
             $scenario['label'],
-            formatMs($wall['control']['median']),
-            formatMs($wall['control']['min']),
-            formatMs($wall['control']['max']),
-            formatMs($wall['active']['median']),
-            formatMs($wall['active']['min']),
-            formatMs($wall['active']['max']),
-            formatMs($wall['delta']['paired']['median']),
-            formatMs($wall['delta']['paired']['p25']),
-            formatMs($wall['delta']['paired']['p75']),
+            formatMs($lifecycle['control']['median']),
+            formatMs($lifecycle['control']['min']),
+            formatMs($lifecycle['control']['max']),
+            formatMs($lifecycle['active']['median']),
+            formatMs($lifecycle['active']['min']),
+            formatMs($lifecycle['active']['max']),
+            formatMs($lifecycle['delta']['paired']['median']),
+            formatMs($lifecycle['delta']['paired']['p25']),
+            formatMs($lifecycle['delta']['paired']['p75']),
+            formatMs($response['delta']['paired']['median']),
+            formatMs($postResponse['delta']['paired']['median']),
             formatMiB($memory['delta']['paired']['median']),
             formatMs($queries['delta']['paired']['median']),
             formatMs($shutdown['delta']['paired']['median'])
@@ -411,9 +441,11 @@ try {
     }
 
     $markdown[] = '';
-    $markdown[] = 'Positive deltas mean the active request used more time/memory/queries than its matched inactive control. Negative wall-clock pair deltas can occur from runner noise; use the median and distribution rather than a single request.';
+    $markdown[] = 'The canonical total-overhead figure is **full lifecycle wall time**, which waits for the post-finalize marker. Response wall time is retained separately because this runtime can return a response before shutdown/finalization is complete.';
     $markdown[] = '';
-    $markdown[] = '**Validity policy:** this job fails for missing pairs, malformed metrics, plugin-state mismatch, missing sample counts, or when the external client returns before the post-shutdown marker is observable. It intentionally does **not** fail on any arbitrary overhead number.';
+    $markdown[] = 'Positive deltas mean the active request used more time/memory/queries than its matched inactive control. Negative pair deltas can occur from runner noise; use the median and distribution rather than a single request.';
+    $markdown[] = '';
+    $markdown[] = '**Validity policy:** this job fails for missing pairs, malformed metrics, plugin-state mismatch, missing sample counts, or when the post-shutdown marker never appears within the bounded validity timeout. It intentionally does **not** fail on any arbitrary overhead number.';
     $markdown[] = '';
     $markdown[] = '**Claim ceiling:** these numbers characterize this disposable runtime only. They do not establish production traffic, arbitrary hosting, every plugin/theme combination, or SRWF production behavior.';
     $markdown[] = '';

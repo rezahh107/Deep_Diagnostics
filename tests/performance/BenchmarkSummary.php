@@ -47,10 +47,12 @@ final class WddtfPerformanceBenchmarkSummary {
             }
 
             $metrics = [
-                'wall_ms'            => 'float',
-                'peak_memory_bytes'  => 'int',
-                'db_query_count'     => 'int',
-                'late_shutdown_ms'   => 'float',
+                'lifecycle_wall_ms'   => 'float',
+                'response_wall_ms'    => 'float',
+                'post_response_ms'    => 'float',
+                'peak_memory_bytes'   => 'int',
+                'db_query_count'      => 'int',
+                'late_shutdown_ms'    => 'float',
             ];
 
             $scenarioSummary = [];
@@ -82,7 +84,7 @@ final class WddtfPerformanceBenchmarkSummary {
                     ],
                 ];
 
-                if ( 'wall_ms' === $metric && (float) $controlStats['median'] > 0.0 ) {
+                if ( 'lifecycle_wall_ms' === $metric && (float) $controlStats['median'] > 0.0 ) {
                     $summary['delta']['median_relative_percent'] = round(
                         ($medianDelta / (float) $controlStats['median']) * 100,
                         1
@@ -101,7 +103,19 @@ final class WddtfPerformanceBenchmarkSummary {
 
     /** @param array<string,mixed> $sample */
     private static function validateSample(array $sample, int $expectedPairs): void {
-        foreach ( ['scenario', 'state', 'pair', 'wall_ms', 'peak_memory_bytes', 'db_query_count', 'late_shutdown_ms'] as $key ) {
+        foreach (
+            [
+                'scenario',
+                'state',
+                'pair',
+                'lifecycle_wall_ms',
+                'response_wall_ms',
+                'post_response_ms',
+                'peak_memory_bytes',
+                'db_query_count',
+                'late_shutdown_ms',
+            ] as $key
+        ) {
             if ( ! array_key_exists($key, $sample) ) {
                 throw new RuntimeException("Benchmark sample is missing {$key}.");
             }
@@ -119,13 +133,26 @@ final class WddtfPerformanceBenchmarkSummary {
             throw new RuntimeException('Benchmark sample pair is outside the expected range.');
         }
 
-        foreach ( ['wall_ms', 'peak_memory_bytes', 'db_query_count', 'late_shutdown_ms'] as $metric ) {
+        foreach (
+            [
+                'lifecycle_wall_ms',
+                'response_wall_ms',
+                'post_response_ms',
+                'peak_memory_bytes',
+                'db_query_count',
+                'late_shutdown_ms',
+            ] as $metric
+        ) {
             if ( ! is_int($sample[$metric]) && ! is_float($sample[$metric]) ) {
                 throw new RuntimeException("Benchmark metric {$metric} is not numeric.");
             }
             if ( ! is_finite((float) $sample[$metric]) || (float) $sample[$metric] < 0 ) {
                 throw new RuntimeException("Benchmark metric {$metric} is invalid.");
             }
+        }
+
+        if ( (float) $sample['lifecycle_wall_ms'] < (float) $sample['response_wall_ms'] ) {
+            throw new RuntimeException('Lifecycle wall time cannot be shorter than client response wall time.');
         }
     }
 
