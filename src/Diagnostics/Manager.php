@@ -9,6 +9,7 @@ use WDDTF\Collectors\HttpCollector;
 use WDDTF\Collectors\QueryCollector;
 use WDDTF\Collectors\SystemInspector;
 use WDDTF\Cron\CronDiagnostics;
+use WDDTF\Gravity\GravityDiagnostics;
 use WDDTF\Logging\File_Logger;
 use WDDTF\Privacy\Redactor;
 use WDDTF\Support\Env;
@@ -26,10 +27,12 @@ final class Manager {
     private AssetAnalyzer $assets;
     private SystemInspector $system;
     private CronDiagnostics $cron;
+    private GravityDiagnostics $gravity;
     private bool $finalized = false;
 
-    public function __construct(?CronDiagnostics $cron = null) {
+    public function __construct(?CronDiagnostics $cron = null, ?GravityDiagnostics $gravity = null) {
         $this->cron = $cron ?? new CronDiagnostics();
+        $this->gravity = $gravity ?? new GravityDiagnostics();
     }
 
     public function boot(): void {
@@ -42,6 +45,7 @@ final class Manager {
         $this->system        = new SystemInspector();
 
         $this->cron->register();
+        $this->gravity->register();
 
         // Manager boots from the plugin's plugins_loaded callback. Earlier lifecycle hooks
         // cannot be observed truthfully from a normal plugin, so mark our own observation
@@ -107,15 +111,23 @@ final class Manager {
         return ( new Redactor() )->redact($this->cron->snapshot());
     }
 
+    public function startGravityFlowInboxObservation(): array {
+        return $this->gravity->startInboxObservation();
+    }
+
+    public function getGravityDiagnostics(): array {
+        return ( new Redactor() )->redact($this->gravity->snapshot());
+    }
+
     public function finalize(): void {
         if ( $this->finalized ) {
             return;
         }
 
-        // AJAX and REST still need explicit session/correlation semantics before their
-        // per-request reports can be finalized truthfully. Cron callbacks persist only
-        // their bounded correlated qualification evidence and never masquerade as a
-        // normal-request latency report.
+        // AJAX and REST still do not finalize ordinary per-request reports. Gravity Flow
+        // Inbox observation uses its own bounded Diagnostic Session to persist only the
+        // minimal correlated sample for an observed Inbox render/refresh. Cron callbacks
+        // likewise persist only their bounded qualification evidence.
         if (
             wp_doing_ajax() ||
             ( defined('REST_REQUEST') && REST_REQUEST ) ||
@@ -142,6 +154,7 @@ final class Manager {
         $assetData = $this->assets->snapshot();
         $system    = $this->system->snapshot();
         $cron      = $this->cron->snapshot();
+        $gravity   = $this->gravity->snapshot();
         $elapsed   = (microtime(true) - $this->startedAt) * 1000;
 
         $snapshot = [
@@ -168,6 +181,7 @@ final class Manager {
             'assets'        => $assetData,
             'system'        => $system,
             'cron'          => $cron,
+            'gravity'       => $gravity,
         ];
 
         // Redactor remains the centralized persisted/reporting privacy authority. Normal
