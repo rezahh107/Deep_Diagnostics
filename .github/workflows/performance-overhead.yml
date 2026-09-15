@@ -1,0 +1,138 @@
+name: Performance Overhead Qualification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  characterize:
+    name: Paired WordPress overhead characterization
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: wordpress
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: wp-cli
+          coverage: none
+
+      - name: Build installable plugin
+        run: python3 create_fixed_plugin.py
+
+      - name: Install controlled WordPress runtime
+        run: |
+          set -euo pipefail
+          mkdir wordpress
+          cd wordpress
+          wp core download --version=6.5 --quiet
+          wp config create --dbname=wordpress --dbuser=root --dbpass=root --dbhost=127.0.0.1:3306 --skip-check --quiet
+          wp config set DISABLE_WP_CRON true --raw --quiet
+          wp core install --url=http://127.0.0.1:8080 --title='Deep Diagnostics Performance Lab' --admin_user=admin --admin_password='ci-password' --admin_email=admin@example.test --skip-email --quiet
+          unzip -q ../dist/wp-deep-diagnostics.zip -d wp-content/plugins
+          mkdir -p wp-content/mu-plugins
+          cp ../tests/performance/wddtf-benchmark-probe.php wp-content/mu-plugins/wddtf-benchmark-probe.php
+          page_id="$(wp post create --post_type=page --post_status=publish --post_title='Benchmark Fixture' --post_content='Stable local benchmark content.' --porcelain)"
+          echo "PAGE_ID=$page_id" >> "$GITHUB_ENV"
+
+      - name: Start local deterministic HTTP fixture
+        run: |
+          set -euo pipefail
+          mkdir -p perf-http
+          printf 'deep-diagnostics-local-fixture\n' > perf-http/fixture.txt
+          nohup python3 -m http.server 8090 --bind 127.0.0.1 --directory perf-http > perf-http.log 2>&1 &
+          echo $! > perf-http.pid
+          cd wordpress
+          wp option update wddtf_benchmark_http_url 'http://127.0.0.1:8090/fixture.txt' --quiet
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8090/fixture.txt >/dev/null; then
+              exit 0
+            fi
+            sleep 0.2
+          done
+          echo 'local HTTP fixture failed to start' >&2
+          exit 1
+
+      - name: Start WordPress HTTP runtime
+        run: |
+          set -euo pipefail
+          : > benchmark-metrics.jsonl
+          cd wordpress
+          WDDTF_BENCHMARK_METRICS_FILE="$GITHUB_WORKSPACE/benchmark-metrics.jsonl" \
+            nohup wp server --host=127.0.0.1 --port=8080 > "$GITHUB_WORKSPACE/wordpress-server.log" 2>&1 &
+          echo $! > "$GITHUB_WORKSPACE/wordpress-server.pid"
+          for i in $(seq 1 50); do
+            if curl --fail --silent http://127.0.0.1:8080/ >/dev/null; then
+              exit 0
+            fi
+            sleep 0.2
+          done
+          echo 'WordPress HTTP runtime failed to start' >&2
+          cat "$GITHUB_WORKSPACE/wordpress-server.log" >&2 || true
+          exit 1
+
+      - name: Run paired qualification
+        run: |
+          set -euo pipefail
+          python3 tests/performance/benchmark.py \
+            --wp-path "$GITHUB_WORKSPACE/wordpress" \
+            --base-url 'http://127.0.0.1:8080' \
+            --metrics-file "$GITHUB_WORKSPACE/benchmark-metrics.jsonl" \
+            --output "$GITHUB_WORKSPACE/performance-result.json" \
+            --summary "$GITHUB_WORKSPACE/performance-summary.md" \
+            --page-id "$PAGE_ID" \
+            --warmups 5 \
+            --samples 15
+          cat performance-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate machine-readable result
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('performance-result.json')
+          result = json.loads(path.read_text(encoding='utf-8'))
+          assert result['schema_version'] == 1
+          assert result['policy']['hard_overhead_budget'] is None
+          assert result['policy']['savequeries_default'] is False
+          assert len(result['scenarios']) == 3
+          for scenario in result['scenarios']:
+              assert set(scenario['states']) == {'inactive', 'active'}
+              for state in scenario['states'].values():
+                  assert state['summary']['sample_count'] == 15
+                  assert len(state['samples']) == 15
+          print('performance result contract valid')
+          PY
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deep-diagnostics-performance-overhead
+          path: |
+            performance-result.json
+            performance-summary.md
+            benchmark-metrics.jsonl
+            wordpress-server.log
+            perf-http.log
+          if-no-files-found: error
+          retention-days: 14
