@@ -7,6 +7,9 @@ if ( ! defined('ABSPATH') ) {
 if ( ! defined('WDDTF_VERSION') ) {
     define('WDDTF_VERSION', 'test');
 }
+if ( ! defined('WDDTF_URL') ) {
+    define('WDDTF_URL', 'http://example.test/wp-content/plugins/wp-deep-diagnostics/');
+}
 if ( ! defined('HOUR_IN_SECONDS') ) {
     define('HOUR_IN_SECONDS', 3600);
 }
@@ -28,6 +31,18 @@ if ( ! class_exists('WP_Error') ) {
 
         public function get_error_message(): string {
             return $this->message;
+        }
+    }
+}
+
+if ( ! class_exists('WddtfJsonResponse') ) {
+    final class WddtfJsonResponse extends RuntimeException {
+        public function __construct(
+            public readonly bool $success,
+            public readonly mixed $data,
+            public readonly int $statusCode,
+        ) {
+            parent::__construct($success ? 'success' : 'error', $statusCode);
         }
     }
 }
@@ -74,6 +89,10 @@ $GLOBALS['wddtf_test_is_ajax'] = false;
 $GLOBALS['wddtf_test_is_admin'] = false;
 $GLOBALS['wddtf_test_did_actions'] = [];
 $GLOBALS['wddtf_test_auth_salt'] = 'test-only-server-held-auth-salt-0123456789abcdef';
+$GLOBALS['wddtf_test_logged_in'] = false;
+$GLOBALS['wddtf_test_capabilities'] = [];
+$GLOBALS['wddtf_test_enqueued_scripts'] = [];
+$GLOBALS['wddtf_test_inline_scripts'] = [];
 
 function add_action(string $hook, callable $callback, int $priority = 10, int $accepted_args = 1): bool {
     $GLOBALS['wddtf_test_actions'][$hook][] = [$callback, $priority, $accepted_args];
@@ -95,6 +114,14 @@ function wp_doing_ajax(): bool {
 
 function is_admin(): bool {
     return true === ($GLOBALS['wddtf_test_is_admin'] ?? false);
+}
+
+function is_user_logged_in(): bool {
+    return true === ($GLOBALS['wddtf_test_logged_in'] ?? false);
+}
+
+function current_user_can(string $capability): bool {
+    return true === ($GLOBALS['wddtf_test_capabilities'][$capability] ?? false);
 }
 
 function __(string $text, string $domain = 'default'): string {
@@ -200,6 +227,58 @@ function get_transient(string $key): mixed {
 function delete_transient(string $key): bool {
     unset($GLOBALS['wddtf_test_transients'][$key]);
     return true;
+}
+
+function wp_enqueue_script(
+    string $handle,
+    string $src = '',
+    array $deps = [],
+    string|bool|null $ver = false,
+    array|bool $args = false
+): void {
+    $GLOBALS['wddtf_test_enqueued_scripts'][$handle] = [
+        'src'  => $src,
+        'deps' => $deps,
+        'ver'  => $ver,
+        'args' => $args,
+    ];
+}
+
+function wp_add_inline_script(string $handle, string $data, string $position = 'after'): bool {
+    $GLOBALS['wddtf_test_inline_scripts'][$handle][] = [
+        'data'     => $data,
+        'position' => $position,
+    ];
+    return true;
+}
+
+function admin_url(string $path = ''): string {
+    return 'http://example.test/wp-admin/' . ltrim($path, '/');
+}
+
+function wp_create_nonce(string|int $action = -1): string {
+    return 'nonce-' . substr(hash('sha256', (string) $action), 0, 20);
+}
+
+function check_ajax_referer(string|int $action = -1, string|bool $query_arg = false, bool $stop = true): int|false {
+    $key = is_string($query_arg) && '' !== $query_arg ? $query_arg : '_ajax_nonce';
+    $provided = isset($_POST[$key]) && is_string($_POST[$key]) ? wp_unslash($_POST[$key]) : '';
+    $valid = hash_equals(wp_create_nonce($action), $provided);
+    if ( $valid ) {
+        return 1;
+    }
+    if ( $stop ) {
+        throw new WddtfJsonResponse(false, ['code' => 'invalid_nonce'], 403);
+    }
+    return false;
+}
+
+function wp_send_json_success(mixed $value = null, ?int $status_code = null, int $flags = 0): never {
+    throw new WddtfJsonResponse(true, $value, $status_code ?? 200);
+}
+
+function wp_send_json_error(mixed $value = null, ?int $status_code = null, int $flags = 0): never {
+    throw new WddtfJsonResponse(false, $value, $status_code ?? 200);
 }
 
 function wp_schedule_single_event(int $timestamp, string $hook, array $args = [], bool $wp_error = false): bool|WP_Error {
