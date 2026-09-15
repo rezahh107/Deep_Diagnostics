@@ -174,7 +174,7 @@ $gravityActionNotices = [
                 </tbody></table>
             </div>
             <?php if ( ! empty($ready['truncated']) ) : ?>
-                <p class="description"><?php esc_html_e('The displayed event list is bounded and truncated; the total count above includes all ready event instances observed.', 'wp-deep-diagnostics'); ?></p></div>
+                <p class="description"><?php esc_html_e('The displayed event list is bounded and truncated; the total count above includes all ready event instances observed.', 'wp-deep-diagnostics'); ?></p>
             <?php endif; ?>
         <?php endif; ?>
     </section>
