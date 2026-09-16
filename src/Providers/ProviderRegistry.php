@@ -24,12 +24,16 @@ final class ProviderRegistry {
             } catch (Throwable) {
                 return $this->discovery = [
                     'providers' => [],
-                    'errors' => [['provider_key' => '', 'reason' => 'registration_filter_failed']],
+                    'errors' => [$this->globalError('registration_filter_failed')],
                 ];
             }
-            if ( is_array($candidate) ) {
-                $registrations = $candidate;
+            if ( ! is_array($candidate) ) {
+                return $this->discovery = [
+                    'providers' => [],
+                    'errors' => [$this->globalError('registration_filter_invalid')],
+                ];
             }
+            $registrations = $candidate;
         }
 
         $providers = [];
@@ -44,13 +48,13 @@ final class ProviderRegistry {
             $provider = $validated['provider'];
             $key = $provider['provider_key'];
             if ( isset($conflicted[$key]) ) {
-                $errors[] = ['provider_key' => $key, 'reason' => 'duplicate_provider_key'];
+                $errors[] = $this->providerError($key, 'duplicate_provider_key');
                 continue;
             }
             if ( isset($providers[$key]) ) {
                 unset($providers[$key]);
                 $conflicted[$key] = true;
-                $errors[] = ['provider_key' => $key, 'reason' => 'duplicate_provider_key'];
+                $errors[] = $this->providerError($key, 'duplicate_provider_key');
                 continue;
             }
             $providers[$key] = $provider;
@@ -60,24 +64,57 @@ final class ProviderRegistry {
         return $this->discovery = ['providers' => $providers, 'errors' => $errors];
     }
 
-    public function get(string $providerKey): ?array {
+    /**
+     * Resolves one requested provider from the single cached discovery result.
+     *
+     * Global discovery errors block every provider. Provider-scoped errors block only
+     * the exact matching key. Rejected/unowned registrations remain diagnostic evidence
+     * but never act as wildcard errors for an unrelated provider.
+     */
+    public function resolve(string $providerKey): array {
         $providerKey = sanitize_key($providerKey);
         $discovery = $this->discover();
-        return $discovery['providers'][$providerKey] ?? null;
+        $blockingError = null;
+
+        foreach ( $discovery['errors'] as $error ) {
+            if ( ! is_array($error) ) {
+                continue;
+            }
+            $scope = $error['scope'] ?? null;
+            if ( 'global' === $scope ) {
+                $blockingError = $error;
+                break;
+            }
+            if ( 'provider' === $scope && ($error['provider_key'] ?? null) === $providerKey ) {
+                $blockingError = $error;
+                break;
+            }
+        }
+
+        return [
+            'provider_key' => $providerKey,
+            'provider' => null === $blockingError ? ($discovery['providers'][$providerKey] ?? null) : null,
+            'blocking_error' => $blockingError,
+            'errors' => $discovery['errors'],
+        ];
+    }
+
+    public function get(string $providerKey): ?array {
+        return $this->resolve($providerKey)['provider'];
     }
 
     private function validate(mixed $registration): array {
         if ( ! is_array($registration) ) {
-            return ['error' => ['provider_key' => '', 'reason' => 'invalid_registration']];
+            return ['error' => $this->rejectedError('invalid_registration')];
         }
 
         $rawKey = $registration['provider_key'] ?? null;
         $key = is_string($rawKey) ? sanitize_key($rawKey) : '';
         if ( '' === $key || $key !== $rawKey ) {
-            return ['error' => ['provider_key' => $key, 'reason' => 'invalid_provider_key']];
+            return ['error' => $this->rejectedError('invalid_provider_key')];
         }
         if ( ProviderContract::CONTRACT_VERSION !== ($registration['contract_version'] ?? null) ) {
-            return ['error' => ['provider_key' => $key, 'reason' => 'incompatible_contract_version']];
+            return ['error' => $this->providerError($key, 'incompatible_contract_version')];
         }
 
         $name = $this->safeLabel($registration['name'] ?? null, 120);
@@ -85,7 +122,7 @@ final class ProviderRegistry {
         $schemaVersion = $this->safeToken($registration['schema_version'] ?? null, 64);
         $callback = $registration['snapshot_callback'] ?? null;
         if ( null === $name || null === $providerVersion || null === $schemaVersion || ! is_callable($callback) ) {
-            return ['error' => ['provider_key' => $key, 'reason' => 'invalid_registration']];
+            return ['error' => $this->providerError($key, 'invalid_registration')];
         }
 
         $capabilities = [];
@@ -110,6 +147,18 @@ final class ProviderRegistry {
             'capabilities' => array_values(array_unique($capabilities)),
             'snapshot_callback' => $callback,
         ]];
+    }
+
+    private function globalError(string $reason): array {
+        return ['scope' => 'global', 'provider_key' => null, 'reason' => $reason];
+    }
+
+    private function providerError(string $providerKey, string $reason): array {
+        return ['scope' => 'provider', 'provider_key' => $providerKey, 'reason' => $reason];
+    }
+
+    private function rejectedError(string $reason): array {
+        return ['scope' => 'rejected', 'provider_key' => null, 'reason' => $reason];
     }
 
     private function safeLabel(mixed $value, int $maxLength): ?string {
