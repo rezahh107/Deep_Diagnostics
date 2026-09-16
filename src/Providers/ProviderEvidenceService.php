@@ -116,7 +116,7 @@ final class ProviderEvidenceService {
         if ( is_array($snapshot['incidents'] ?? null) ) {
             foreach ( $snapshot['incidents'] as $incident ) {
                 if ( is_array($incident) ) {
-                    $incidents[] = $this->interpretIncident($incident, $deepReport);
+                    $incidents[] = $this->interpretIncident($providerKey, $incident, $deepReport);
                 }
             }
         }
@@ -259,10 +259,18 @@ final class ProviderEvidenceService {
         }
 
         $nextStep = ! empty($unresolved)
-            ? $this->nextStepForUnresolved($unresolved)
+            ? $this->nextStepForUnresolved($providerKey, $unresolved)
             : (! empty($incidents)
-                ? __('Open the most relevant historical incident below to inspect its ordered provider chain. If the problem is still reproducible, collect a fresh bundle so current state can be compared without assuming the old incident still applies.', 'wp-deep-diagnostics')
+                ? __('Open the most relevant historical incident below to inspect its ordered provider chain. If the problem is still reproducible, collect a fresh snapshot so current state can be compared without assuming the old incident still applies.', 'wp-deep-diagnostics')
                 : __('If the real behavior is still wrong, reproduce it and collect a fresh provider snapshot or incident so the missing boundary can be observed.', 'wp-deep-diagnostics'));
+
+        $limitations = [
+            __('DEEP does not change provider configuration or business/domain state.', 'wp-deep-diagnostics'),
+            __('DEEP does not independently reinterpret provider-owned reason codes as stronger conclusions than the supplied evidence supports.', 'wp-deep-diagnostics'),
+        ];
+        if ( 'gpp' === $providerKey ) {
+            $limitations[] = __('For GPP specifically, DEEP does not activate profiles, repair bindings, or change runtime claims.', 'wp-deep-diagnostics');
+        }
 
         return [
             'result' => $result,
@@ -274,14 +282,15 @@ final class ProviderEvidenceService {
                 __('Without an explicit exact correlation reference, provider evidence is context beside DEEP evidence, not proof that both came from the same request or cause.', 'wp-deep-diagnostics'),
             ],
             'next_step' => $nextStep,
-            'limitations' => [
-                __('DEEP does not activate GPP profiles, repair bindings, change runtime claims, or write GPP configuration.', 'wp-deep-diagnostics'),
-                __('DEEP does not independently reinterpret GPP domain reason codes as stronger conclusions than the supplied evidence supports.', 'wp-deep-diagnostics'),
-            ],
+            'limitations' => $limitations,
         ];
     }
 
-    private function nextStepForUnresolved(array $unresolved): string {
+    private function nextStepForUnresolved(string $providerKey, array $unresolved): string {
+        if ( 'gpp' !== $providerKey ) {
+            return __('Review the first unresolved fact in the owning provider plugin, correct it there if appropriate, then collect a new snapshot. DEEP does not repair provider-owned state.', 'wp-deep-diagnostics');
+        }
+
         foreach ( $unresolved as $fact ) {
             $kind = $fact['kind'] ?? null;
             $state = $fact['state'] ?? null;
@@ -298,7 +307,7 @@ final class ProviderEvidenceService {
         return __('Review the first unresolved provider fact in GPP, resolve it in the owning plugin, then collect a new snapshot to confirm the state changed.', 'wp-deep-diagnostics');
     }
 
-    private function interpretIncident(array $incident, array $deepReport): array {
+    private function interpretIncident(string $providerKey, array $incident, array $deepReport): array {
         $first = is_array($incident['first_inconsistent_boundary'] ?? null) ? $incident['first_inconsistent_boundary'] : null;
         $stage = $first['stage'] ?? null;
         $result = $first['result'] ?? null;
@@ -308,10 +317,10 @@ final class ProviderEvidenceService {
             $next = __('Inspect the technical provider chronology and collect a newer provider snapshot if the relevant boundary was not recorded.', 'wp-deep-diagnostics');
         } elseif ( 'SKIP' === $result ) {
             $meaning = __('The provider recorded a degraded/skip decision at this boundary. A fallback may have preserved host behavior; this does not by itself mean the host plugin failed.', 'wp-deep-diagnostics');
-            $next = $this->nextStepForStage((string) $stage);
+            $next = $this->nextStepForStage($providerKey, (string) $stage);
         } else {
             $meaning = __('The provider recorded a failure at this boundary. DEEP preserves that provider decision and its reason code without reimplementing the provider’s domain rules.', 'wp-deep-diagnostics');
-            $next = $this->nextStepForStage((string) $stage);
+            $next = $this->nextStepForStage($providerKey, (string) $stage);
         }
         return $incident + [
             'plain_meaning' => $meaning,
@@ -327,7 +336,10 @@ final class ProviderEvidenceService {
         ];
     }
 
-    private function nextStepForStage(string $stage): string {
+    private function nextStepForStage(string $providerKey, string $stage): string {
+        if ( 'gpp' !== $providerKey ) {
+            return __('Inspect this stage in the owning provider plugin using the provider-supplied reason code and fallback. Correct provider-owned state there if appropriate, then collect a fresh snapshot.', 'wp-deep-diagnostics');
+        }
         if ( str_contains($stage, 'PROFILE') ) {
             return __('Inspect the corresponding profile/surface activation and readiness in GPP, then collect a fresh snapshot after the owning GPP state is corrected.', 'wp-deep-diagnostics');
         }
@@ -420,7 +432,7 @@ final class ProviderEvidenceService {
                 'meaning' => __('DEEP failed closed instead of interpreting corrupt or unreadable stored evidence.', 'wp-deep-diagnostics'),
                 'proven' => [__('The DEEP provider evidence store could not be validated for this read.', 'wp-deep-diagnostics')],
                 'unresolved' => [__('Provider health, current state, incidents, and comparison are not proven while the DEEP evidence store is unreadable.', 'wp-deep-diagnostics')],
-                'next_step' => __('Inspect or restore the Deep Diagnostics provider-evidence storage before importing or comparing provider evidence again. Do not change GPP configuration based on this DEEP storage error.', 'wp-deep-diagnostics'),
+                'next_step' => __('Inspect or restore the Deep Diagnostics provider-evidence storage before importing or comparing provider evidence again. Do not change provider configuration based on this DEEP storage error.', 'wp-deep-diagnostics'),
                 'limitations' => [__('This is a DEEP evidence-storage failure, not evidence that the provider plugin or host runtime failed.', 'wp-deep-diagnostics')],
             ],
             'incidents' => [],
