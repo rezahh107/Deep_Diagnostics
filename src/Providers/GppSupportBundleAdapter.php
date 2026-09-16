@@ -104,7 +104,6 @@ final class GppSupportBundleAdapter {
             $contextKey = $this->sanitizer->token($context['context_key'] ?? null, 128);
             $bindingSet = $this->sanitizer->token($context['binding_set_id'] ?? null, 128);
             $bindingVersion = $this->sanitizer->version($context['binding_set_version'] ?? null);
-            $formRef = $this->sanitizer->integerReference($context['form_id'] ?? null);
             $facts = is_array($context['facts'] ?? null) ? $context['facts'] : [];
 
             foreach ( $facts as $fact ) {
@@ -129,7 +128,6 @@ final class GppSupportBundleAdapter {
                         'context_key' => $contextKey,
                         'binding_set_id' => $bindingSet,
                         'binding_set_version' => $bindingVersion,
-                        'form_ref' => $formRef,
                     ];
                 }
 
@@ -152,7 +150,6 @@ final class GppSupportBundleAdapter {
                         'context_key' => $contextKey,
                         'binding_set_id' => $bindingSet,
                         'binding_set_version' => $bindingVersion,
-                        'form_ref' => $formRef,
                     ];
                 }
             }
