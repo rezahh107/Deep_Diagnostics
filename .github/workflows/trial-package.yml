@@ -42,7 +42,7 @@ jobs:
           php -l templates/provider-diagnostics.php
           php -l src/Admin/Admin_Page.php
           php -l src/Diagnostics/Manager.php
-          vendor/bin/phpunit tests/Provider00IntegrityRepairTest.php tests/ProviderEvidenceTest.php tests/ProviderForwardCompatibilityTest.php tests/AdminProviderActionTest.php tests/ProviderAdminMarkupTest.php
+          vendor/bin/phpunit tests/Provider00IntegrityRepairTest.php tests/Provider01ReadConsistencyTest.php tests/ProviderEvidenceTest.php tests/ProviderForwardCompatibilityTest.php tests/AdminProviderActionTest.php tests/ProviderAdminMarkupTest.php
 
       - name: Build deterministic trial ZIP twice
         run: |
