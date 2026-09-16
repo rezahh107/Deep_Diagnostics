@@ -48,20 +48,10 @@ final class EvidenceSanitizer {
         }
         $date = \DateTimeImmutable::createFromFormat(\DateTimeInterface::ATOM, $value);
         $errors = \DateTimeImmutable::getLastErrors();
-        if ( false === $date || ( is_array($errors) && ($errors['warning_count'] > 0 || $errors['error_count'] > 0) ) ) {
+        if ( false === $date || (is_array($errors) && ($errors['warning_count'] > 0 || $errors['error_count'] > 0)) ) {
             return null;
         }
         return $date->format(\DateTimeInterface::ATOM);
-    }
-
-    public function integerReference(mixed $value): int|string|null {
-        if ( is_int($value) && $value >= 0 ) {
-            return $value;
-        }
-        if ( is_string($value) && 1 === preg_match('/^[0-9]{1,12}$/', $value) ) {
-            return $value;
-        }
-        return null;
     }
 
     public function privacyBoundary(mixed $value): array {
@@ -91,7 +81,7 @@ final class EvidenceSanitizer {
             return [];
         }
         $result = [];
-        foreach ( array_slice($records, 0, ProviderContract::MAX_INCIDENTS) as $record ) {
+        foreach ( array_slice(array_values($records), -ProviderContract::MAX_INCIDENTS) as $record ) {
             $normalized = $this->trace($record, false);
             if ( null !== $normalized ) {
                 $result[] = $normalized;
