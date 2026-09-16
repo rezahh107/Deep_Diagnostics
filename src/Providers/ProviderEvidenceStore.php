@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace WDDTF\Providers;
 
 use Closure;
+use Throwable;
 use WDDTF\Privacy\Redactor;
 
 if ( ! defined('ABSPATH') ) {
@@ -12,10 +13,31 @@ if ( ! defined('ABSPATH') ) {
 
 final class ProviderEvidenceStore {
     private const STATE_SCHEMA_VERSION = '1.0.0';
-    private Closure $clock;
+    private const LOCK_TTL = 30;
+    private const LOCK_ATTEMPTS = 8;
+    private const LOCK_RETRY_US = 25000;
 
-    public function __construct(?callable $clock = null) {
+    private Closure $clock;
+    private Closure $lockTokenFactory;
+    private Closure $sleeper;
+    private ?Closure $transactionProbe;
+
+    public function __construct(
+        ?callable $clock = null,
+        ?callable $lockTokenFactory = null,
+        ?callable $sleeper = null,
+        ?callable $transactionProbe = null
+    ) {
         $this->clock = Closure::fromCallable($clock ?? static fn(): int => time());
+        $this->lockTokenFactory = Closure::fromCallable(
+            $lockTokenFactory ?? static fn(): string => 'plk-' . bin2hex(random_bytes(12))
+        );
+        $this->sleeper = Closure::fromCallable(
+            $sleeper ?? static function(int $microseconds): void {
+                usleep($microseconds);
+            }
+        );
+        $this->transactionProbe = null === $transactionProbe ? null : Closure::fromCallable($transactionProbe);
     }
 
     public function save(array $snapshot): array {
@@ -33,35 +55,93 @@ final class ProviderEvidenceStore {
         if ( ! $this->isValidSnapshot($snapshot, $providerKey) ) {
             throw new \InvalidArgumentException('Invalid normalized provider snapshot.');
         }
-
         $fingerprint = $this->fingerprint($snapshot);
-        $state = $this->loadState();
-        if (
-            ! array_key_exists($providerKey, $state['providers']) &&
-            count($state['providers']) >= ProviderContract::MAX_PROVIDERS
-        ) {
-            throw new \RuntimeException('Provider evidence provider limit reached.');
+
+        $owner = $this->acquireLock();
+        if ( null === $owner ) {
+            throw new \RuntimeException('Provider evidence mutation lock unavailable.');
         }
 
-        $history = $state['providers'][$providerKey] ?? [];
-        foreach ( $history as $entry ) {
-            if ( is_array($entry) && hash_equals((string) ($entry['fingerprint'] ?? ''), $fingerprint) ) {
-                return ['stored' => false, 'duplicate' => true, 'fingerprint' => $fingerprint, 'history_count' => count($history)];
+        $result = null;
+        $failure = null;
+
+        try {
+            $this->probe('after_lock_acquired', ['provider_key' => $providerKey, 'owner' => $owner]);
+
+            // Shared-state decisions intentionally use state reloaded only after lock ownership.
+            $state = $this->loadState();
+            $this->probe('after_state_reload', ['provider_key' => $providerKey, 'state' => $state]);
+
+            if (
+                ! array_key_exists($providerKey, $state['providers']) &&
+                count($state['providers']) >= ProviderContract::MAX_PROVIDERS
+            ) {
+                throw new \RuntimeException('Provider evidence provider limit reached.');
             }
+
+            $history = $state['providers'][$providerKey] ?? [];
+            foreach ( $history as $entry ) {
+                if ( is_array($entry) && hash_equals((string) ($entry['fingerprint'] ?? ''), $fingerprint) ) {
+                    if ( ! $this->ownsActiveLock($owner) ) {
+                        throw new \RuntimeException('Provider evidence mutation lock lost.');
+                    }
+                    $result = [
+                        'stored' => false,
+                        'duplicate' => true,
+                        'fingerprint' => $fingerprint,
+                        'history_count' => count($history),
+                    ];
+                    break;
+                }
+            }
+
+            if ( null === $result ) {
+                $history[] = [
+                    'fingerprint' => $fingerprint,
+                    'ingested_at_utc' => gmdate('c', ($this->clock)()),
+                    'snapshot' => $snapshot,
+                ];
+                if ( count($history) > ProviderContract::MAX_HISTORY_PER_PROVIDER ) {
+                    $history = array_slice($history, -1 * ProviderContract::MAX_HISTORY_PER_PROVIDER);
+                }
+                $state['providers'][$providerKey] = $history;
+
+                $this->probe('before_commit', ['provider_key' => $providerKey, 'state' => $state]);
+                if ( ! $this->ownsActiveLock($owner) ) {
+                    throw new \RuntimeException('Provider evidence mutation lock lost.');
+                }
+
+                $this->persist($state);
+
+                // A write completed after lease loss is persistence uncertainty, never success.
+                if ( ! $this->ownsActiveLock($owner) ) {
+                    throw new \RuntimeException('Provider evidence mutation ownership became uncertain.');
+                }
+
+                $result = [
+                    'stored' => true,
+                    'duplicate' => false,
+                    'fingerprint' => $fingerprint,
+                    'history_count' => count($history),
+                ];
+            }
+        } catch (Throwable $exception) {
+            $failure = $exception;
         }
 
-        $history[] = [
-            'fingerprint' => $fingerprint,
-            'ingested_at_utc' => gmdate('c', ($this->clock)()),
-            'snapshot' => $snapshot,
-        ];
-        if ( count($history) > ProviderContract::MAX_HISTORY_PER_PROVIDER ) {
-            $history = array_slice($history, -1 * ProviderContract::MAX_HISTORY_PER_PROVIDER);
+        $released = $this->releaseLock($owner);
+        if ( ! $released && null === $failure ) {
+            $failure = new \RuntimeException('Provider evidence mutation lock release failed.');
         }
-        $state['providers'][$providerKey] = $history;
-        $this->persist($state);
 
-        return ['stored' => true, 'duplicate' => false, 'fingerprint' => $fingerprint, 'history_count' => count($history)];
+        if ( null !== $failure ) {
+            throw $failure;
+        }
+        if ( ! is_array($result) ) {
+            throw new \RuntimeException('Provider evidence mutation result is unavailable.');
+        }
+
+        return $result;
     }
 
     public function history(string $providerKey): array {
@@ -131,7 +211,36 @@ final class ProviderEvidenceStore {
     }
 
     public function reset(): void {
-        delete_option(ProviderContract::STORE_OPTION);
+        $owner = $this->acquireLock();
+        if ( null === $owner ) {
+            throw new \RuntimeException('Provider evidence mutation lock unavailable.');
+        }
+
+        $failure = null;
+        try {
+            if ( ! $this->ownsActiveLock($owner) ) {
+                throw new \RuntimeException('Provider evidence mutation lock lost.');
+            }
+            if ( ! delete_option(ProviderContract::STORE_OPTION) ) {
+                $existing = get_option(ProviderContract::STORE_OPTION, null);
+                if ( null !== $existing && false !== $existing ) {
+                    throw new \RuntimeException('Provider evidence reset failed.');
+                }
+            }
+            if ( ! $this->ownsActiveLock($owner) ) {
+                throw new \RuntimeException('Provider evidence mutation ownership became uncertain.');
+            }
+        } catch (Throwable $exception) {
+            $failure = $exception;
+        }
+
+        $released = $this->releaseLock($owner);
+        if ( ! $released && null === $failure ) {
+            $failure = new \RuntimeException('Provider evidence mutation lock release failed.');
+        }
+        if ( null !== $failure ) {
+            throw $failure;
+        }
     }
 
     private function appendSetChanges(string $kind, mixed $before, mixed $after, array &$changes): void {
@@ -233,11 +342,116 @@ final class ProviderEvidenceStore {
     }
 
     private function persist(array $state): void {
-        if ( ! update_option(ProviderContract::STORE_OPTION, $state, false) ) {
-            $existing = get_option(ProviderContract::STORE_OPTION, null);
-            if ( $existing !== $state ) {
-                throw new \RuntimeException('Provider evidence persistence failed.');
+        update_option(ProviderContract::STORE_OPTION, $state, false);
+        $persisted = get_option(ProviderContract::STORE_OPTION, null);
+        if ( $persisted !== $state ) {
+            throw new \RuntimeException('Provider evidence persistence failed.');
+        }
+    }
+
+    private function acquireLock(): ?string {
+        if ( ! function_exists('add_option') || ! function_exists('get_option') ) {
+            return null;
+        }
+
+        $key = $this->lockKey();
+        $owner = (string) ($this->lockTokenFactory)();
+        if ( 1 !== preg_match('/^plk-[a-f0-9]{24}$/', $owner) ) {
+            return null;
+        }
+
+        for ( $attempt = 0; $attempt < self::LOCK_ATTEMPTS; ++$attempt ) {
+            $now = ($this->clock)();
+            $lock = [
+                'owner' => $owner,
+                'expires_at' => $now + self::LOCK_TTL,
+            ];
+
+            if ( add_option($key, $lock, '', false) ) {
+                return $owner;
             }
+
+            $observed = get_option($key, false);
+            if ( $this->isStaleLock($observed, $now) ) {
+                $this->deleteLockIfMatches($key, $observed);
+                continue;
+            }
+
+            if ( $attempt + 1 < self::LOCK_ATTEMPTS ) {
+                ($this->sleeper)(self::LOCK_RETRY_US);
+            }
+        }
+
+        return null;
+    }
+
+    private function ownsActiveLock(string $owner): bool {
+        if ( ! function_exists('get_option') ) {
+            return false;
+        }
+
+        $observed = get_option($this->lockKey(), false);
+        return is_array($observed)
+            && is_string($observed['owner'] ?? null)
+            && hash_equals($owner, $observed['owner'])
+            && is_int($observed['expires_at'] ?? null)
+            && $observed['expires_at'] > ($this->clock)();
+    }
+
+    private function releaseLock(string $owner): bool {
+        if ( ! function_exists('get_option') ) {
+            return false;
+        }
+
+        $key = $this->lockKey();
+        $observed = get_option($key, false);
+        if ( ! is_array($observed) || ! is_string($observed['owner'] ?? null) || ! hash_equals($owner, $observed['owner']) ) {
+            return false;
+        }
+
+        return $this->deleteLockIfMatches($key, $observed);
+    }
+
+    private function deleteLockIfMatches(string $key, mixed $expected): bool {
+        global $wpdb;
+
+        if ( ! isset($wpdb) || ! $wpdb instanceof \wpdb || ! is_array($expected) ) {
+            return false;
+        }
+
+        $deleted = $wpdb->delete(
+            $wpdb->options,
+            [
+                'option_name' => $key,
+                'option_value' => maybe_serialize($expected),
+            ],
+            ['%s', '%s']
+        );
+
+        if ( 1 !== $deleted ) {
+            return false;
+        }
+
+        if ( function_exists('wp_cache_delete') ) {
+            wp_cache_delete($key, 'options');
+        }
+
+        return true;
+    }
+
+    private function isStaleLock(mixed $lock, int $now): bool {
+        return is_array($lock)
+            && is_int($lock['expires_at'] ?? null)
+            && $lock['expires_at'] <= $now;
+    }
+
+    private function lockKey(): string {
+        return ProviderContract::STORE_OPTION . '_lock';
+    }
+
+    private function probe(string $stage, array $context): void {
+        if ( null !== $this->transactionProbe ) {
+            ($this->transactionProbe)($stage, $context);
         }
     }
 
