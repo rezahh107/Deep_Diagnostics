@@ -1,0 +1,55 @@
+name: Trial package artifact
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  trial-package:
+    name: Exact-head prerelease package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Verify exact checkout identity
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_SHA"
+          echo "Exact checkout verified: $actual_sha"
+
+      - name: Build deterministic trial ZIP twice
+        run: |
+          set -euo pipefail
+          python3 create_fixed_plugin.py
+          first="$(sha256sum dist/wp-deep-diagnostics.zip | awk '{print $1}')"
+          rm -rf build dist
+          python3 create_fixed_plugin.py
+          second="$(sha256sum dist/wp-deep-diagnostics.zip | awk '{print $1}')"
+          test "$first" = "$second"
+          printf '%s  %s\n' "$second" 'wp-deep-diagnostics.zip' | tee dist/wp-deep-diagnostics.zip.sha256
+          echo "TRIAL_ZIP_SHA256=$second"
+
+      - name: Verify trial build identity
+        run: |
+          set -euo pipefail
+          unzip -p dist/wp-deep-diagnostics.zip wp-deep-diagnostics/wp-deep-diagnostics.php | grep -q 'Version: 1.6.0-beta.1'
+          unzip -p dist/wp-deep-diagnostics.zip wp-deep-diagnostics/wp-deep-diagnostics.php | grep -q "WDDTF_VERSION', '1.6.0-beta.1'"
+
+      - name: Upload exact-head trial artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-deep-diagnostics-1.6.0-beta.1-${{ github.event.pull_request.head.sha }}
+          path: |
+            dist/wp-deep-diagnostics.zip
+            dist/wp-deep-diagnostics.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
