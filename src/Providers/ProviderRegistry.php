@@ -3,15 +3,30 @@ declare(strict_types=1);
 
 namespace WDDTF\Providers;
 
+use Throwable;
+
 if ( ! defined('ABSPATH') ) {
     exit;
 }
 
 final class ProviderRegistry {
+    private ?array $discovery = null;
+
     public function discover(): array {
+        if ( null !== $this->discovery ) {
+            return $this->discovery;
+        }
+
         $registrations = [];
         if ( function_exists('apply_filters') ) {
-            $candidate = apply_filters(ProviderContract::REGISTRATION_FILTER, []);
+            try {
+                $candidate = apply_filters(ProviderContract::REGISTRATION_FILTER, []);
+            } catch (Throwable) {
+                return $this->discovery = [
+                    'providers' => [],
+                    'errors' => [['provider_key' => '', 'reason' => 'registration_filter_failed']],
+                ];
+            }
             if ( is_array($candidate) ) {
                 $registrations = $candidate;
             }
@@ -19,6 +34,7 @@ final class ProviderRegistry {
 
         $providers = [];
         $errors = [];
+        $conflicted = [];
         foreach ( $registrations as $registration ) {
             $validated = $this->validate($registration);
             if ( isset($validated['error']) ) {
@@ -27,7 +43,13 @@ final class ProviderRegistry {
             }
             $provider = $validated['provider'];
             $key = $provider['provider_key'];
+            if ( isset($conflicted[$key]) ) {
+                $errors[] = ['provider_key' => $key, 'reason' => 'duplicate_provider_key'];
+                continue;
+            }
             if ( isset($providers[$key]) ) {
+                unset($providers[$key]);
+                $conflicted[$key] = true;
                 $errors[] = ['provider_key' => $key, 'reason' => 'duplicate_provider_key'];
                 continue;
             }
@@ -35,7 +57,7 @@ final class ProviderRegistry {
         }
         ksort($providers, SORT_STRING);
 
-        return ['providers' => $providers, 'errors' => $errors];
+        return $this->discovery = ['providers' => $providers, 'errors' => $errors];
     }
 
     public function get(string $providerKey): ?array {
