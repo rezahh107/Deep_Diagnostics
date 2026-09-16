@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use WDDTF\Providers\EvidenceSanitizer;
 use WDDTF\Providers\ProviderContract;
 use WDDTF\Providers\ProviderEvidenceService;
 use WDDTF\Providers\ProviderEvidenceStore;
@@ -50,17 +51,24 @@ final class ProviderEvidenceTest extends TestCase {
         self::assertContains('NOT_PROVEN', array_column($diagnostics['technical_evidence']['unresolved'], 'state'));
         self::assertContains('runtime_claim', array_column($diagnostics['technical_evidence']['unresolved'], 'kind'));
         self::assertSame('2026-09-15T10:00:00+00:00', $diagnostics['technical_evidence']['source']['observed_at_utc']);
-        self::assertSame('2026-09-16T10:33:20+00:00', $diagnostics['current_entry']['ingested_at_utc']);
+        self::assertSame('2026-09-16T09:13:20+00:00', $diagnostics['current_entry']['ingested_at_utc']);
     }
 
-    public function test_invalid_json_wrong_type_unsupported_schema_and_oversize_fail_clearly(): void {
+    public function test_invalid_json_wrong_type_unsupported_schema_timestamp_and_oversize_fail_clearly(): void {
         self::assertSame('invalid_json', $this->service()->importGppBundle('{bad')['reason']);
+
         $bundle = $this->bundle();
         $bundle['bundle_type'] = 'other.bundle';
         self::assertSame('unsupported_bundle_type', $this->service()->importGppBundle((string) wp_json_encode($bundle))['reason']);
+
         $bundle = $this->bundle();
         $bundle['schema_version'] = '2.0.0';
         self::assertSame('unsupported_schema_version', $this->service()->importGppBundle((string) wp_json_encode($bundle))['reason']);
+
+        $bundle = $this->bundle();
+        $bundle['generated_at_utc'] = 'not-a-time';
+        self::assertSame('invalid_source_timestamp', $this->service()->importGppBundle((string) wp_json_encode($bundle))['reason']);
+
         self::assertSame('import_too_large', $this->service()->importGppBundle(str_repeat('x', ProviderContract::MAX_IMPORT_BYTES + 1))['reason']);
     }
 
@@ -106,6 +114,23 @@ final class ProviderEvidenceTest extends TestCase {
         self::assertSame('ENTRY_DETAIL_BINDING_READINESS', $incidents[1]['first_inconsistent_boundary']['stage']);
         self::assertSame('SKIP', $incidents[1]['first_inconsistent_boundary']['result']);
         self::assertStringContainsString('does not by itself mean the host plugin failed', $incidents[1]['plain_meaning']);
+    }
+
+    public function test_incident_retention_keeps_latest_bounded_records_in_provider_order(): void {
+        $records = [];
+        for ( $i = 1; $i <= 30; ++$i ) {
+            $records[] = [
+                'schema_version' => '1.0.0',
+                'surface' => 'surface.' . $i,
+                'status' => 'FAIL',
+                'events' => [['seq' => 1, 'stage' => 'STAGE_' . $i, 'result' => 'FAIL', 'reason_code' => 'reason.' . $i, 'fallback' => null]],
+                'observed_at_utc' => sprintf('2026-09-%02dT10:00:00+00:00', min($i, 30)),
+            ];
+        }
+        $incidents = ( new EvidenceSanitizer() )->incidents($records);
+        self::assertCount(ProviderContract::MAX_INCIDENTS, $incidents);
+        self::assertSame('surface.6', $incidents[0]['surface']);
+        self::assertSame('surface.30', $incidents[24]['surface']);
     }
 
     public function test_absent_exact_ref_never_becomes_timing_correlation(): void {
@@ -172,7 +197,7 @@ final class ProviderEvidenceTest extends TestCase {
         self::assertSame(ProviderContract::MAX_HISTORY_PER_PROVIDER, $service->diagnostics('gpp')['history_count']);
     }
 
-    public function test_fake_direct_provider_proves_contract_is_generic(): void {
+    public function test_fake_direct_provider_proves_contract_and_guidance_are_generic(): void {
         add_filter(ProviderContract::REGISTRATION_FILTER, static function(array $providers): array {
             $providers[] = self::fakeRegistration('fake_provider');
             return $providers;
@@ -183,6 +208,21 @@ final class ProviderEvidenceTest extends TestCase {
         self::assertSame('direct_provider_connected', $d['connection']['status']);
         self::assertSame('fake_provider', $d['technical_evidence']['provider']['key']);
         self::assertSame('delivery.sms', $d['technical_evidence']['current']['components'][0]['key']);
+        self::assertStringNotContainsString('GPP', implode(' ', $d['interpretation']['limitations']));
+        self::assertStringContainsString('provider', strtolower($d['interpretation']['limitations'][0]));
+    }
+
+    public function test_direct_provider_rejects_missing_or_invalid_source_timestamp(): void {
+        add_filter(ProviderContract::REGISTRATION_FILTER, static function(array $providers): array {
+            $registration = self::fakeRegistration('bad_time_provider');
+            $registration['snapshot_callback'] = static fn(): array => [
+                'schema_version' => '1.0.0',
+                'generated_at_utc' => 'not-a-time',
+            ];
+            $providers[] = $registration;
+            return $providers;
+        });
+        self::assertSame('invalid_source_timestamp', $this->service()->captureDirect('bad_time_provider')['reason']);
     }
 
     public function test_duplicate_direct_provider_key_fails_closed_instead_of_picking_one_registration(): void {
