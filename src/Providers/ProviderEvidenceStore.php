@@ -36,6 +36,13 @@ final class ProviderEvidenceStore {
 
         $fingerprint = $this->fingerprint($snapshot);
         $state = $this->loadState();
+        if (
+            ! array_key_exists($providerKey, $state['providers']) &&
+            count($state['providers']) >= ProviderContract::MAX_PROVIDERS
+        ) {
+            throw new \RuntimeException('Provider evidence provider limit reached.');
+        }
+
         $history = $state['providers'][$providerKey] ?? [];
         foreach ( $history as $entry ) {
             if ( is_array($entry) && hash_equals((string) ($entry['fingerprint'] ?? ''), $fingerprint) ) {
@@ -144,7 +151,12 @@ final class ProviderEvidenceStore {
         if ( null === $state || false === $state ) {
             return $this->initialState();
         }
-        if ( ! is_array($state) || self::STATE_SCHEMA_VERSION !== ($state['schema_version'] ?? null) || ! is_array($state['providers'] ?? null) ) {
+        if (
+            ! is_array($state) ||
+            self::STATE_SCHEMA_VERSION !== ($state['schema_version'] ?? null) ||
+            ! is_array($state['providers'] ?? null) ||
+            count($state['providers']) > ProviderContract::MAX_PROVIDERS
+        ) {
             throw new \RuntimeException('Provider evidence state is corrupt.');
         }
         foreach ( $state['providers'] as $providerKey => $history ) {
