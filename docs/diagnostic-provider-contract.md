@@ -38,32 +38,32 @@ add_filter(
 );
 ```
 
-`provider_key` is a stable sanitized key. `contract_version` versions the DEEP registration contract; `schema_version` versions the provider's snapshot shape. DEEP rejects incompatible registrations or direct snapshots that do not match the registered schema version.
+`provider_key` is a stable sanitized key. `contract_version` versions the DEEP registration contract; `schema_version` versions the provider's snapshot shape. DEEP rejects incompatible registrations or direct snapshots that do not match the registered schema version. Duplicate registrations for the same provider key fail closed instead of selecting an arbitrary winner. Provider discovery is stable for one DEEP request.
 
 ## Snapshot fields admitted by DEEP
 
 The generic direct snapshot admits only bounded metadata:
 
-- `generated_at_utc`: source timestamp in ISO-8601 form.
+- `generated_at_utc`: **required** source timestamp in ISO-8601 form. DEEP stores its own ingestion timestamp separately and rejects evidence whose source chronology cannot be represented truthfully.
 - `environment`: at most 20 sanitized key/version pairs.
 - `current_status`: stable non-PII token.
 - `components`: at most 50 key/status pairs.
 - `unresolved`: at most 100 provider-declared key/state facts with optional status/reason code.
-- `incidents`: at most 25 historical incident traces, with at most 40 ordered events each.
+- `incidents`: at most the latest 25 historical incident traces, with at most 40 ordered events each.
 - `recent_success`: at most 12 provider-declared successful traces.
 - `privacy_boundary`: bounded declarations such as `OMITTED`.
 - `correlation_ref`: optional exact opaque reference. DEEP never substitutes time proximity for this reference.
 - `claim_ceiling`: optional stable token describing the provider-declared ceiling.
 
-Incident records use provider-owned `stage`, `result`, `reason_code`, and `fallback` tokens. DEEP preserves event order, selects the first supplied `FAIL`/`SKIP` boundary, and does not infer missing stages or duplicate provider business logic.
+Incident records use provider-owned `stage`, `result`, `reason_code`, and `fallback` tokens. DEEP preserves admitted event order, selects the first supplied `FAIL`/`SKIP` boundary, and does not infer missing stages or duplicate provider business logic.
 
 ## Privacy and ownership requirements
 
-The callback must be read-only and privacy-safe before DEEP receives its result. Do not expose submitted form values, names, national IDs, phone numbers, emails, uploaded file names or contents, cookies, tokens, credentials, sensitive headers, raw request/response bodies, absolute server paths, or exception argument values.
+The callback must be read-only and privacy-safe before DEEP receives its result. Do not expose submitted form values, names, national IDs, phone numbers, emails, uploaded file names or contents, cookies, tokens, credentials, sensitive headers, raw request/response bodies, absolute server paths, raw host/form identifiers, or exception argument values.
 
-DEEP applies an allowlist normalizer and its central Redactor before bounded persistence. Unknown fields are discarded. Provider history is capped at five distinct normalized snapshots per provider; exact duplicate snapshots do not create additional history entries.
+DEEP applies an allowlist normalizer and its central Redactor before bounded persistence. Unknown fields are discarded. Provider history is capped at five distinct normalized snapshots per provider; exact duplicate snapshots do not create additional history entries. Corrupt or unreadable DEEP provider storage fails closed and is reported as a DEEP evidence-storage problem, not as provider failure.
 
-A direct provider is an evidence seam, not a management seam. The callback must not ask DEEP to activate provider features, repair state, change configuration, or take business-domain actions.
+A direct provider is an evidence seam, not a management seam. The callback must not ask DEEP to activate provider features, repair state, change configuration, or take business-domain actions. Generic DEEP interpretation stays provider-neutral; provider-specific guidance belongs at the adapter/presentation boundary.
 
 ## GPP support-bundle fallback
 
@@ -73,3 +73,5 @@ The first concrete adapter accepts only:
 - `schema_version = 1.0.0`
 
 The adapter reads the privacy-safe shape published by GPP Support Bundle v1, including nested binding facts and runtime claims. Top-level `unknown_or_unproven` is not treated as a complete health summary: nested `UNBOUND` bindings and `NOT_PROVEN` runtime claims remain visible even when that top-level list is empty.
+
+GPP bundle `generated_at_utc` is required and remains distinct from DEEP ingestion time. GPP's raw `form_id` is not persisted into DEEP's normalized Provider evidence. Current profile/binding state, historical incidents, and recent provider successes remain separate evidence categories.
