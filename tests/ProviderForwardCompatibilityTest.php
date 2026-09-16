@@ -62,23 +62,7 @@ final class ProviderForwardCompatibilityTest extends TestCase {
 
     public function test_direct_four_part_provider_version_survives_privacy_redaction_as_version_metadata(): void {
         add_filter(ProviderContract::REGISTRATION_FILTER, static function(array $providers): array {
-            $providers[] = [
-                'contract_version' => '1.0.0',
-                'provider_key' => 'four_part_provider',
-                'name' => 'Four Part Provider',
-                'provider_version' => '3.1.1.1',
-                'schema_version' => '1.0.0',
-                'capabilities' => ['health_snapshot'],
-                'snapshot_callback' => static fn(): array => [
-                    'schema_version' => '1.0.0',
-                    'generated_at_utc' => '2026-09-16T12:00:00+00:00',
-                    'components' => [],
-                    'unresolved' => [],
-                    'incidents' => [],
-                    'recent_success' => [],
-                    'privacy_boundary' => ['sensitive_values' => 'OMITTED'],
-                ],
-            ];
+            $providers[] = self::registration('four_part_provider', '3.1.1.1');
             return $providers;
         });
 
@@ -90,10 +74,53 @@ final class ProviderForwardCompatibilityTest extends TestCase {
         self::assertStringNotContainsString('[redacted-ip]', (string) wp_json_encode($evidence));
     }
 
+    public function test_total_retained_provider_count_is_bounded_without_silent_eviction(): void {
+        add_filter(ProviderContract::REGISTRATION_FILTER, static function(array $providers): array {
+            for ( $i = 1; $i <= ProviderContract::MAX_PROVIDERS + 1; ++$i ) {
+                $providers[] = self::registration('provider_' . $i, '1.0.' . $i);
+            }
+            return $providers;
+        });
+
+        $service = $this->service();
+        for ( $i = 1; $i <= ProviderContract::MAX_PROVIDERS; ++$i ) {
+            self::assertTrue($service->captureDirect('provider_' . $i)['ok']);
+        }
+
+        $overflow = $service->captureDirect('provider_' . (ProviderContract::MAX_PROVIDERS + 1));
+        self::assertFalse($overflow['ok']);
+        self::assertSame('provider_persistence_failed', $overflow['reason']);
+
+        $state = get_option(ProviderContract::STORE_OPTION, []);
+        self::assertIsArray($state);
+        self::assertCount(ProviderContract::MAX_PROVIDERS, $state['providers']);
+        self::assertArrayHasKey('provider_1', $state['providers']);
+    }
+
     private function service(): ProviderEvidenceService {
         return new ProviderEvidenceService(
             new ProviderRegistry(),
             new ProviderEvidenceStore(static fn(): int => 1789550000)
         );
+    }
+
+    private static function registration(string $key, string $version): array {
+        return [
+            'contract_version' => '1.0.0',
+            'provider_key' => $key,
+            'name' => 'Test Provider ' . $key,
+            'provider_version' => $version,
+            'schema_version' => '1.0.0',
+            'capabilities' => ['health_snapshot'],
+            'snapshot_callback' => static fn(): array => [
+                'schema_version' => '1.0.0',
+                'generated_at_utc' => '2026-09-16T12:00:00+00:00',
+                'components' => [],
+                'unresolved' => [],
+                'incidents' => [],
+                'recent_success' => [],
+                'privacy_boundary' => ['sensitive_values' => 'OMITTED'],
+            ],
+        ];
     }
 }
