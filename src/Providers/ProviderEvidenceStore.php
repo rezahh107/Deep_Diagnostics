@@ -69,7 +69,8 @@ final class ProviderEvidenceStore {
             $this->probe('after_lock_acquired', ['provider_key' => $providerKey, 'owner' => $owner]);
 
             // Shared-state decisions intentionally use state reloaded only after lock ownership.
-            $state = $this->loadState();
+            $observed = $this->loadStateSnapshot();
+            $state = $observed['state'];
             $this->probe('after_state_reload', ['provider_key' => $providerKey, 'state' => $state]);
 
             if (
@@ -110,8 +111,14 @@ final class ProviderEvidenceStore {
                 if ( ! $this->ownsActiveLock($owner) ) {
                     throw new \RuntimeException('Provider evidence mutation lock lost.');
                 }
+                $this->probe('after_commit_ownership_check', [
+                    'provider_key' => $providerKey,
+                    'expected_exists' => $observed['exists'],
+                    'expected_state' => $observed['stored'],
+                    'next_state' => $state,
+                ]);
 
-                $this->persist($state);
+                $this->persistIfUnchanged($state, $observed['exists'], $observed['stored']);
 
                 // A write completed after lease loss is persistence uncertainty, never success.
                 if ( ! $this->ownsActiveLock($owner) ) {
@@ -191,17 +198,26 @@ final class ProviderEvidenceStore {
 
         $failure = null;
         try {
-            if ( ! $this->ownsActiveLock($owner) ) {
-                throw new \RuntimeException('Provider evidence mutation lock lost.');
-            }
-            if ( ! delete_option(ProviderContract::STORE_OPTION) ) {
-                $existing = get_option(ProviderContract::STORE_OPTION, null);
-                if ( null !== $existing && false !== $existing ) {
-                    throw new \RuntimeException('Provider evidence reset failed.');
+            $observed = $this->loadStateSnapshot();
+            $this->probe('after_reset_state_reload', [
+                'expected_exists' => $observed['exists'],
+                'expected_state' => $observed['stored'],
+            ]);
+
+            if ( $observed['exists'] ) {
+                if ( ! $this->ownsActiveLock($owner) ) {
+                    throw new \RuntimeException('Provider evidence mutation lock lost.');
                 }
-            }
-            if ( ! $this->ownsActiveLock($owner) ) {
-                throw new \RuntimeException('Provider evidence mutation ownership became uncertain.');
+                $this->probe('after_reset_ownership_check', [
+                    'expected_state' => $observed['stored'],
+                ]);
+                $this->deleteStoreIfUnchanged($observed['stored']);
+
+                if ( ! $this->ownsActiveLock($owner) ) {
+                    throw new \RuntimeException('Provider evidence mutation ownership became uncertain.');
+                }
+            } elseif ( ! $this->ownsActiveLock($owner) ) {
+                throw new \RuntimeException('Provider evidence mutation lock lost.');
             }
         } catch (Throwable $exception) {
             $failure = $exception;
@@ -287,19 +303,28 @@ final class ProviderEvidenceStore {
     }
 
     private function loadState(): array {
-        $state = get_option(ProviderContract::STORE_OPTION, null);
-        if ( null === $state || false === $state ) {
-            return $this->initialState();
+        return $this->loadStateSnapshot()['state'];
+    }
+
+    private function loadStateSnapshot(): array {
+        $missing = new \stdClass();
+        $stored = get_option(ProviderContract::STORE_OPTION, $missing);
+        if ( $stored === $missing ) {
+            return [
+                'exists' => false,
+                'stored' => null,
+                'state' => $this->initialState(),
+            ];
         }
         if (
-            ! is_array($state) ||
-            self::STATE_SCHEMA_VERSION !== ($state['schema_version'] ?? null) ||
-            ! is_array($state['providers'] ?? null) ||
-            count($state['providers']) > ProviderContract::MAX_PROVIDERS
+            ! is_array($stored) ||
+            self::STATE_SCHEMA_VERSION !== ($stored['schema_version'] ?? null) ||
+            ! is_array($stored['providers'] ?? null) ||
+            count($stored['providers']) > ProviderContract::MAX_PROVIDERS
         ) {
             throw new \RuntimeException('Provider evidence state is corrupt.');
         }
-        foreach ( $state['providers'] as $providerKey => $history ) {
+        foreach ( $stored['providers'] as $providerKey => $history ) {
             if (
                 ! is_string($providerKey) ||
                 '' === $providerKey ||
@@ -315,7 +340,11 @@ final class ProviderEvidenceStore {
                 }
             }
         }
-        return $state;
+        return [
+            'exists' => true,
+            'stored' => $stored,
+            'state' => $stored,
+        ];
     }
 
     private function isValidEntry(mixed $entry, string $providerKey): bool {
@@ -372,11 +401,69 @@ final class ProviderEvidenceStore {
         return true;
     }
 
-    private function persist(array $state): void {
-        update_option(ProviderContract::STORE_OPTION, $state, false);
+    private function persistIfUnchanged(array $state, bool $expectedExists, ?array $expectedState): void {
+        if ( ! $expectedExists ) {
+            if ( ! add_option(ProviderContract::STORE_OPTION, $state, '', false) ) {
+                throw new \RuntimeException('Provider evidence persistence conflict.');
+            }
+        } else {
+            global $wpdb;
+
+            if ( ! isset($wpdb) || ! $wpdb instanceof \wpdb || ! is_array($expectedState) ) {
+                throw new \RuntimeException('Provider evidence conditional persistence unavailable.');
+            }
+
+            $updated = $wpdb->update(
+                $wpdb->options,
+                ['option_value' => maybe_serialize($state)],
+                [
+                    'option_name' => ProviderContract::STORE_OPTION,
+                    'option_value' => maybe_serialize($expectedState),
+                ],
+                ['%s'],
+                ['%s', '%s']
+            );
+            if ( 1 !== $updated ) {
+                throw new \RuntimeException('Provider evidence persistence conflict.');
+            }
+            $this->clearStoreCache();
+        }
+
         $persisted = get_option(ProviderContract::STORE_OPTION, null);
         if ( $persisted !== $state ) {
             throw new \RuntimeException('Provider evidence persistence failed.');
+        }
+    }
+
+    private function deleteStoreIfUnchanged(array $expectedState): void {
+        global $wpdb;
+
+        if ( ! isset($wpdb) || ! $wpdb instanceof \wpdb ) {
+            throw new \RuntimeException('Provider evidence conditional reset unavailable.');
+        }
+
+        $deleted = $wpdb->delete(
+            $wpdb->options,
+            [
+                'option_name' => ProviderContract::STORE_OPTION,
+                'option_value' => maybe_serialize($expectedState),
+            ],
+            ['%s', '%s']
+        );
+        if ( 1 !== $deleted ) {
+            throw new \RuntimeException('Provider evidence reset conflict.');
+        }
+        $this->clearStoreCache();
+
+        $missing = new \stdClass();
+        if ( get_option(ProviderContract::STORE_OPTION, $missing) !== $missing ) {
+            throw new \RuntimeException('Provider evidence reset failed.');
+        }
+    }
+
+    private function clearStoreCache(): void {
+        if ( function_exists('wp_cache_delete') ) {
+            wp_cache_delete(ProviderContract::STORE_OPTION, 'options');
         }
     }
 
