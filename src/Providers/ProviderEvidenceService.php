@@ -47,9 +47,15 @@ final class ProviderEvidenceService {
         }
 
         try {
-            $stored = $this->store->save($this->gppAdapter->normalize($decoded));
+            $normalized = $this->gppAdapter->normalize($decoded);
         } catch (ProviderImportException $exception) {
             return $this->failure($exception->reason(), $exception->getMessage());
+        } catch (Throwable) {
+            return $this->failure('import_normalization_failed', __('Deep Diagnostics could not safely normalize this provider evidence.', 'wp-deep-diagnostics'));
+        }
+
+        try {
+            $stored = $this->store->save($normalized);
         } catch (Throwable) {
             return $this->failure('provider_persistence_failed', __('Deep Diagnostics could not safely store the normalized provider evidence.', 'wp-deep-diagnostics'));
         }
@@ -73,11 +79,17 @@ final class ProviderEvidenceService {
 
         try {
             $payload = ($registration['snapshot_callback'])();
-            $stored = $this->store->save($this->directAdapter->normalize($registration, $payload));
+            $normalized = $this->directAdapter->normalize($registration, $payload);
         } catch (ProviderImportException $exception) {
             return $this->failure($exception->reason(), $exception->getMessage());
         } catch (Throwable) {
             return $this->failure('direct_provider_error', __('The direct diagnostic provider could not return compatible privacy-safe evidence.', 'wp-deep-diagnostics'));
+        }
+
+        try {
+            $stored = $this->store->save($normalized);
+        } catch (Throwable) {
+            return $this->failure('provider_persistence_failed', __('Deep Diagnostics could not safely store the normalized provider evidence.', 'wp-deep-diagnostics'));
         }
 
         return [
