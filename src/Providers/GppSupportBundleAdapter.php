@@ -112,8 +112,11 @@ final class GppSupportBundleAdapter {
             $facts = is_array($context['facts'] ?? null) ? $context['facts'] : [];
 
             foreach ( $facts as $fact ) {
-                if ( count($unresolved) >= ProviderContract::MAX_UNRESOLVED || ! is_array($fact) ) {
+                if ( count($unresolved) >= ProviderContract::MAX_UNRESOLVED ) {
                     break 2;
+                }
+                if ( ! is_array($fact) ) {
+                    continue;
                 }
                 $slot = $this->sanitizer->token($fact['semantic_slot_key'] ?? null, 128);
                 $status = $this->sanitizer->token($fact['status'] ?? null, 64);
@@ -138,8 +141,11 @@ final class GppSupportBundleAdapter {
 
                 $claims = is_array($fact['runtime_claims'] ?? null) ? $fact['runtime_claims'] : [];
                 foreach ( $claims as $claim ) {
-                    if ( count($unresolved) >= ProviderContract::MAX_UNRESOLVED || ! is_array($claim) ) {
+                    if ( count($unresolved) >= ProviderContract::MAX_UNRESOLVED ) {
                         break 2;
+                    }
+                    if ( ! is_array($claim) ) {
+                        continue;
                     }
                     $claimName = $this->sanitizer->token($claim['claim'] ?? null, 96);
                     $evidenceState = $this->sanitizer->token($claim['evidence_state'] ?? null, 64);
