@@ -23,6 +23,11 @@ final class GppSupportBundleAdapter {
             throw new ProviderImportException('unsupported_schema_version', __('This GPP Support Bundle schema version is not supported by this Deep Diagnostics build.', 'wp-deep-diagnostics'));
         }
 
+        $observedAt = $this->sanitizer->timestamp($bundle['generated_at_utc'] ?? null);
+        if ( null === $observedAt ) {
+            throw new ProviderImportException('invalid_source_timestamp', __('This GPP Support Bundle does not contain a valid source timestamp.', 'wp-deep-diagnostics'));
+        }
+
         $observed = is_array($bundle['observed'] ?? null) ? $bundle['observed'] : [];
         $gpp = is_array($observed['gpp'] ?? null) ? $observed['gpp'] : [];
         $runtime = is_array($observed['runtime'] ?? null) ? $observed['runtime'] : [];
@@ -52,7 +57,7 @@ final class GppSupportBundleAdapter {
                 'mode' => 'support_bundle',
                 'bundle_type' => self::BUNDLE_TYPE,
                 'schema_version' => self::SCHEMA_VERSION,
-                'observed_at_utc' => $this->sanitizer->timestamp($bundle['generated_at_utc'] ?? null),
+                'observed_at_utc' => $observedAt,
             ],
             'environment' => $environment,
             'current' => [
