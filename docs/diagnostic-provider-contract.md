@@ -61,7 +61,7 @@ Incident records use provider-owned `stage`, `result`, `reason_code`, and `fallb
 
 The callback must be read-only and privacy-safe before DEEP receives its result. Do not expose submitted form values, names, national IDs, phone numbers, emails, uploaded file names or contents, cookies, tokens, credentials, sensitive headers, raw request/response bodies, absolute server paths, raw host/form identifiers, or exception argument values.
 
-DEEP applies an allowlist normalizer and its central Redactor before bounded persistence. Unknown fields are discarded. Provider history is capped at five distinct normalized snapshots per provider; exact duplicate snapshots do not create additional history entries. Corrupt or unreadable DEEP provider storage fails closed and is reported as a DEEP evidence-storage problem, not as provider failure.
+DEEP applies an allowlist normalizer and its central Redactor before bounded persistence. Unknown fields are discarded. Storage is capped at 12 retained provider keys and five distinct normalized snapshots per provider; reaching the provider-key ceiling fails closed rather than silently evicting existing evidence. Exact duplicate snapshots do not create additional history entries. Corrupt or unreadable DEEP provider storage fails closed and is reported as a DEEP evidence-storage problem, not as provider failure.
 
 A direct provider is an evidence seam, not a management seam. The callback must not ask DEEP to activate provider features, repair state, change configuration, or take business-domain actions. Generic DEEP interpretation stays provider-neutral; provider-specific guidance belongs at the adapter/presentation boundary.
 
@@ -72,6 +72,6 @@ The first concrete adapter accepts only:
 - `bundle_type = gpp.support_bundle`
 - `schema_version = 1.0.0`
 
-The adapter reads the privacy-safe shape published by GPP Support Bundle v1, including nested binding facts and runtime claims. Top-level `unknown_or_unproven` is not treated as a complete health summary: nested `UNBOUND` bindings and `NOT_PROVEN` runtime claims remain visible even when that top-level list is empty.
+The adapter reads the privacy-safe shape published by GPP Support Bundle v1, including nested binding facts and runtime claims. Top-level `unknown_or_unproven` is not treated as a complete health summary: nested `UNBOUND` bindings and `NOT_PROVEN` runtime claims remain visible even when that top-level list is empty. Malformed or unknown child items are omitted safely without suppressing later valid facts from the same supported bundle section.
 
 GPP bundle `generated_at_utc` is required and remains distinct from DEEP ingestion time. GPP's raw `form_id` is not persisted into DEEP's normalized Provider evidence. Current profile/binding state, historical incidents, and recent provider successes remain separate evidence categories.
