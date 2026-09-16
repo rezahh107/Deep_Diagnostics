@@ -22,6 +22,8 @@ if ( is_string($currentGravitySession) && 1 === preg_match('/^ds-[a-f0-9]{16}$/'
 }
 delete_transient('wddtf_gravityflow_inbox_observation_current');
 
+delete_option('wddtf_provider_evidence_v1');
+
 $upload = wp_upload_dir();
 $dir    = trailingslashit($upload['basedir']) . 'wp-deep-diagnostics/';
 
