@@ -113,10 +113,13 @@ final class ProviderEvidenceService {
             : null;
 
         try {
-            $currentEntry = $this->store->current($providerKey);
-            $previousEntry = $this->store->previous($providerKey);
-            $history = $this->store->history($providerKey);
-            $comparison = $this->store->comparison($providerKey);
+            $view = $this->store->view($providerKey);
+            $currentEntry = is_array($view['current'] ?? null) ? $view['current'] : null;
+            $previousEntry = is_array($view['previous'] ?? null) ? $view['previous'] : null;
+            $historyCount = is_int($view['history_count'] ?? null) ? $view['history_count'] : 0;
+            $comparison = is_array($view['comparison'] ?? null)
+                ? $view['comparison']
+                : ['available' => false, 'reason' => 'previous_snapshot_unavailable', 'changes' => []];
         } catch (Throwable) {
             return $this->storageFailureDiagnostics($providerKey, $registration, $registryError);
         }
@@ -137,7 +140,7 @@ final class ProviderEvidenceService {
             'direct_available' => null !== $registration,
             'current_entry' => $currentEntry,
             'previous_entry' => $previousEntry,
-            'history_count' => count($history),
+            'history_count' => $historyCount,
             'retention_limit' => ProviderContract::MAX_HISTORY_PER_PROVIDER,
             'comparison' => $comparison,
             'interpretation' => $this->interpret($providerKey, $snapshot),
