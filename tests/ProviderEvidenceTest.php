@@ -52,6 +52,7 @@ final class ProviderEvidenceTest extends TestCase {
         self::assertContains('runtime_claim', array_column($diagnostics['technical_evidence']['unresolved'], 'kind'));
         self::assertSame('2026-09-15T10:00:00+00:00', $diagnostics['technical_evidence']['source']['observed_at_utc']);
         self::assertSame('2026-09-16T09:13:20+00:00', $diagnostics['current_entry']['ingested_at_utc']);
+        self::assertSame('v3.1.1.1', $diagnostics['technical_evidence']['environment']['gravity_forms_version']);
     }
 
     public function test_invalid_json_wrong_type_unsupported_schema_timestamp_and_oversize_fail_clearly(): void {
@@ -169,7 +170,7 @@ final class ProviderEvidenceTest extends TestCase {
         self::assertTrue($service->importGppBundle((string) wp_json_encode($bundle))['ok']);
         self::assertSame('OMITTED', $service->diagnostics('gpp')['technical_evidence']['privacy_boundary']['submitted_entry_values']);
         $stored = (string) wp_json_encode(get_option(ProviderContract::STORE_OPTION, []));
-        foreach ( ['CANARY-RAW-BODY-8841', 'private-person@example.test', 'CANARY-NATIONAL-ID-991122', 'CANARY-EXCEPTION-ARG-3388', 'submitted_value', 'exception', '987654321', 'form_id', 'form_ref'] as $forbidden ) {
+        foreach ( ['CANARY-RAW-BODY-8841', 'private-person@example.test', 'CANARY-NATIONAL-ID-991122', 'CANARY-EXCEPTION-ARG-3388', 'submitted_value', '987654321', 'form_id', 'form_ref', '"exception":'] as $forbidden ) {
             self::assertStringNotContainsString($forbidden, $stored);
         }
     }
