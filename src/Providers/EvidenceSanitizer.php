@@ -39,7 +39,19 @@ final class EvidenceSanitizer {
         if ( ! is_string($value) || '' === $value || strlen($value) > 64 ) {
             return null;
         }
-        return 1 === preg_match('/^[A-Za-z0-9._+-]+$/', $value) ? $value : null;
+        if ( 1 !== preg_match('/^[A-Za-z0-9._+-]+$/', $value) ) {
+            return null;
+        }
+
+        // The central Redactor intentionally treats bare four-octet dotted numbers as
+        // possible IP addresses. Canonicalize legitimate four-part version metadata with
+        // an explicit v-prefix before that privacy boundary so e.g. Gravity Forms 3.1.1.1
+        // remains useful evidence without weakening generic IP redaction.
+        if ( 1 === preg_match('/^\d+(?:\.\d+){3}$/', $value) ) {
+            return 'v' . $value;
+        }
+
+        return $value;
     }
 
     public function timestamp(mixed $value): ?string {
