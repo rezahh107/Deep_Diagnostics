@@ -144,32 +144,86 @@ final class ProviderEvidenceStore {
         return $result;
     }
 
-    public function history(string $providerKey): array {
+    public function view(string $providerKey): array {
         $providerKey = sanitize_key($providerKey);
         if ( '' === $providerKey ) {
-            return [];
+            return $this->emptyView();
         }
+
+        // One logical provider projection is derived from exactly one validated Store state.
         $state = $this->loadState();
         $history = $state['providers'][$providerKey] ?? [];
-        return is_array($history) ? $history : [];
+        $history = is_array($history) ? $history : [];
+        $historyCount = count($history);
+        $current = 0 === $historyCount ? null : $history[$historyCount - 1];
+        $previous = $historyCount < 2 ? null : $history[$historyCount - 2];
+
+        return [
+            'history' => $history,
+            'history_count' => $historyCount,
+            'current' => $current,
+            'previous' => $previous,
+            'comparison' => $this->comparisonFromHistory($history),
+        ];
+    }
+
+    public function history(string $providerKey): array {
+        return $this->view($providerKey)['history'];
     }
 
     public function current(string $providerKey): ?array {
-        $history = $this->history($providerKey);
-        return empty($history) ? null : $history[count($history) - 1];
+        return $this->view($providerKey)['current'];
     }
 
     public function previous(string $providerKey): ?array {
-        $history = $this->history($providerKey);
-        return count($history) < 2 ? null : $history[count($history) - 2];
+        return $this->view($providerKey)['previous'];
     }
 
     public function comparison(string $providerKey): array {
-        $current = $this->current($providerKey);
-        $previous = $this->previous($providerKey);
-        if ( null === $current || null === $previous ) {
+        return $this->view($providerKey)['comparison'];
+    }
+
+    public function reset(): void {
+        $owner = $this->acquireLock();
+        if ( null === $owner ) {
+            throw new \RuntimeException('Provider evidence mutation lock unavailable.');
+        }
+
+        $failure = null;
+        try {
+            if ( ! $this->ownsActiveLock($owner) ) {
+                throw new \RuntimeException('Provider evidence mutation lock lost.');
+            }
+            if ( ! delete_option(ProviderContract::STORE_OPTION) ) {
+                $existing = get_option(ProviderContract::STORE_OPTION, null);
+                if ( null !== $existing && false !== $existing ) {
+                    throw new \RuntimeException('Provider evidence reset failed.');
+                }
+            }
+            if ( ! $this->ownsActiveLock($owner) ) {
+                throw new \RuntimeException('Provider evidence mutation ownership became uncertain.');
+            }
+        } catch (Throwable $exception) {
+            $failure = $exception;
+        }
+
+        $released = $this->releaseLock($owner);
+        if ( ! $released && null === $failure ) {
+            $failure = new \RuntimeException('Provider evidence mutation lock release failed.');
+        }
+        if ( null !== $failure ) {
+            throw $failure;
+        }
+    }
+
+    private function comparisonFromHistory(array $history): array {
+        $historyCount = count($history);
+        if ( $historyCount < 2 ) {
             return ['available' => false, 'reason' => 'previous_snapshot_unavailable', 'changes' => []];
         }
+
+        $previous = $history[$historyCount - 2];
+        $current = $history[$historyCount - 1];
         $currentSnapshot = $current['snapshot'];
         $previousSnapshot = $previous['snapshot'];
         if (
@@ -210,37 +264,14 @@ final class ProviderEvidenceStore {
         ];
     }
 
-    public function reset(): void {
-        $owner = $this->acquireLock();
-        if ( null === $owner ) {
-            throw new \RuntimeException('Provider evidence mutation lock unavailable.');
-        }
-
-        $failure = null;
-        try {
-            if ( ! $this->ownsActiveLock($owner) ) {
-                throw new \RuntimeException('Provider evidence mutation lock lost.');
-            }
-            if ( ! delete_option(ProviderContract::STORE_OPTION) ) {
-                $existing = get_option(ProviderContract::STORE_OPTION, null);
-                if ( null !== $existing && false !== $existing ) {
-                    throw new \RuntimeException('Provider evidence reset failed.');
-                }
-            }
-            if ( ! $this->ownsActiveLock($owner) ) {
-                throw new \RuntimeException('Provider evidence mutation ownership became uncertain.');
-            }
-        } catch (Throwable $exception) {
-            $failure = $exception;
-        }
-
-        $released = $this->releaseLock($owner);
-        if ( ! $released && null === $failure ) {
-            $failure = new \RuntimeException('Provider evidence mutation lock release failed.');
-        }
-        if ( null !== $failure ) {
-            throw $failure;
-        }
+    private function emptyView(): array {
+        return [
+            'history' => [],
+            'history_count' => 0,
+            'current' => null,
+            'previous' => null,
+            'comparison' => ['available' => false, 'reason' => 'previous_snapshot_unavailable', 'changes' => []],
+        ];
     }
 
     private function appendSetChanges(string $kind, mixed $before, mixed $after, array &$changes): void {
