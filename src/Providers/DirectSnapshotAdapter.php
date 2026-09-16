@@ -20,10 +20,17 @@ final class DirectSnapshotAdapter {
             throw new ProviderImportException('direct_schema_mismatch', __('The direct diagnostic provider returned a snapshot schema that does not match its registration.', 'wp-deep-diagnostics'));
         }
 
+        $observedAt = $this->sanitizer->timestamp($payload['generated_at_utc'] ?? null);
+        if ( null === $observedAt ) {
+            throw new ProviderImportException('invalid_source_timestamp', __('The direct diagnostic provider did not supply a valid source timestamp.', 'wp-deep-diagnostics'));
+        }
+
         $components = [];
         if ( is_array($payload['components'] ?? null) ) {
             foreach ( array_slice($payload['components'], 0, ProviderContract::MAX_COMPONENTS) as $component ) {
-                if ( ! is_array($component) ) continue;
+                if ( ! is_array($component) ) {
+                    continue;
+                }
                 $key = $this->sanitizer->token($component['key'] ?? null, 128);
                 $status = $this->sanitizer->token($component['status'] ?? null, 64);
                 if ( null !== $key && null !== $status ) {
@@ -35,7 +42,9 @@ final class DirectSnapshotAdapter {
         $unresolved = [];
         if ( is_array($payload['unresolved'] ?? null) ) {
             foreach ( array_slice($payload['unresolved'], 0, ProviderContract::MAX_UNRESOLVED) as $fact ) {
-                if ( ! is_array($fact) ) continue;
+                if ( ! is_array($fact) ) {
+                    continue;
+                }
                 $kind = $this->sanitizer->token($fact['kind'] ?? null, 64);
                 $key = $this->sanitizer->token($fact['key'] ?? null, 128);
                 $state = $this->sanitizer->token($fact['state'] ?? null, 64);
@@ -63,7 +72,8 @@ final class DirectSnapshotAdapter {
             ksort($environment, SORT_STRING);
         }
 
-        $currentStatus = $this->sanitizer->token($payload['current_status'] ?? null, 64) ?? (empty($unresolved) ? 'no_unresolved_observed' : 'attention');
+        $currentStatus = $this->sanitizer->token($payload['current_status'] ?? null, 64)
+            ?? (empty($unresolved) ? 'no_unresolved_observed' : 'attention');
 
         return [
             'model_version' => ProviderContract::NORMALIZED_SCHEMA_VERSION,
@@ -78,7 +88,7 @@ final class DirectSnapshotAdapter {
                 'mode' => 'direct',
                 'bundle_type' => null,
                 'schema_version' => $registration['schema_version'],
-                'observed_at_utc' => $this->sanitizer->timestamp($payload['generated_at_utc'] ?? null),
+                'observed_at_utc' => $observedAt,
             ],
             'environment' => $environment,
             'current' => ['status' => $currentStatus, 'components' => $components],
