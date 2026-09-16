@@ -128,6 +128,7 @@ final class Manager {
 
     public function getGravityDiagnostics(): array {
         $gravity = ( new Redactor() )->redact($this->gravity->snapshot());
+
         return $this->presentGravityHostVersions($gravity);
     }
 
@@ -151,17 +152,28 @@ final class Manager {
         if ( $this->finalized ) {
             return;
         }
-        if ( wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST) || (defined('DOING_CRON') && DOING_CRON) ) {
+
+        // AJAX and REST still do not finalize ordinary per-request reports. Gravity causal
+        // diagnostics persist only bounded host-hook evidence in their explicit Diagnostic
+        // Session, and Cron callbacks likewise persist only bounded qualification evidence.
+        if (
+            wp_doing_ajax() ||
+            ( defined('REST_REQUEST') && REST_REQUEST ) ||
+            ( defined('DOING_CRON') && DOING_CRON )
+        ) {
             return;
         }
+
         if ( ! function_exists('set_transient') || ! function_exists('wp_upload_dir') ) {
             return;
         }
 
         global $wpdb;
+
         if ( ! isset($wpdb) || ! $wpdb instanceof \wpdb ) {
             return;
         }
+
         $this->finalized = true;
 
         $timeline  = $this->events->snapshot();
@@ -174,38 +186,42 @@ final class Manager {
         $elapsed   = (microtime(true) - $this->startedAt) * 1000;
 
         $snapshot = [
-            'meta' => [
-                'version' => WDDTF_VERSION,
-                'timestamp' => gmdate('c'),
-                'elapsed_ms' => round($elapsed, 2),
-                'memory_peak' => memory_get_peak_usage(true),
+            'meta'          => [
+                'version'      => WDDTF_VERSION,
+                'timestamp'    => gmdate('c'),
+                'elapsed_ms'   => round($elapsed, 2),
+                'memory_peak'  => memory_get_peak_usage(true),
                 'memory_delta' => memory_get_peak_usage(true) - $this->startedMemory,
-                'php_version' => PHP_VERSION,
-                'wp_version' => get_bloginfo('version'),
-                'admin' => is_admin(),
-                'context' => [
+                'php_version'  => PHP_VERSION,
+                'wp_version'   => get_bloginfo('version'),
+                'admin'        => is_admin(),
+                'context'      => [
                     'is_ajax' => wp_doing_ajax(),
                     'is_rest' => defined('REST_REQUEST') && REST_REQUEST,
                     'is_cron' => defined('DOING_CRON') && DOING_CRON,
                 ],
-                'theme' => Env::activeTheme(),
-                'opcache' => Env::opcache(),
+                'theme'        => Env::activeTheme(),
+                'opcache'      => Env::opcache(),
             ],
-            'timeline' => $timeline,
+            'timeline'      => $timeline,
             'http_requests' => $httpData,
-            'queries' => $queryData,
-            'assets' => $assetData,
-            'system' => $system,
-            'cron' => $cron,
-            'gravity' => $gravity,
+            'queries'       => $queryData,
+            'assets'        => $assetData,
+            'system'        => $system,
+            'cron'          => $cron,
+            'gravity'       => $gravity,
         ];
 
-        // Provider evidence is deliberately not polled here. It is acquired only through
-        // explicit admin actions and persisted through its own strict allowlist + Redactor.
+        // Redactor remains the centralized persisted/reporting privacy authority. Normal
+        // reports cross it here; bounded cross-request diagnostic session data crosses the
+        // same Redactor before SessionStore persists it. Provider evidence is acquired only
+        // through explicit admin actions and has its own allowlist + Redactor boundary.
         $snapshot = ( new Redactor() )->redact($snapshot);
+
         $analyzer = new DiagnosticsAnalyzer();
         $report   = $analyzer->analyze($snapshot);
         $logger   = new File_Logger();
+
         $jsonPath = $logger->saveJson($report);
         $mdPath   = $logger->saveMarkdown(( new Report_Builder() )->toMarkdown($report));
 
@@ -216,17 +232,22 @@ final class Manager {
 
     public function getLastReport(): array {
         $report = get_transient('wddtf_last_report');
+
         return is_array($report) ? $report : [];
     }
 
     private function presentGravityHostVersions(array $gravity): array {
         foreach ( ['gravity_forms', 'gravity_flow'] as $host ) {
             $version = $gravity['hosts'][$host]['version'] ?? null;
-            if ( ! is_string($version) ) continue;
+            if ( ! is_string($version) ) {
+                continue;
+            }
+
             if ( 1 === preg_match('/^v([0-9]+(?:\.[0-9A-Za-z-]+)+)$/', $version, $matches) ) {
                 $gravity['hosts'][$host]['version'] = $matches[1];
             }
         }
+
         return $gravity;
     }
 }
