@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: WP Deep Diagnostics
- * Version: 1.5.9
+ * Version: 1.6.0-beta.1
  * Requires PHP: 8.1
  * Description: Forensic admin latency telemetry. LLM-ready.
  * Text Domain: wp-deep-diagnostics
@@ -25,7 +25,7 @@ if ( version_compare(PHP_VERSION, '8.1', '<') ) {
     return;
 }
 
-define('WDDTF_VERSION', '1.5.9');
+define('WDDTF_VERSION', '1.6.0-beta.1');
 define('WDDTF_FILE', __FILE__);
 define('WDDTF_PATH', plugin_dir_path(__FILE__));
 define('WDDTF_URL', plugin_dir_url(__FILE__));
