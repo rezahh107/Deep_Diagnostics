@@ -13,6 +13,7 @@ final class ProviderContract {
     public const REGISTRATION_FILTER = 'wddtf_diagnostic_providers_v1';
     public const STORE_OPTION = 'wddtf_provider_evidence_v1';
     public const MAX_IMPORT_BYTES = 262144;
+    public const MAX_PROVIDERS = 12;
     public const MAX_HISTORY_PER_PROVIDER = 5;
     public const MAX_COMPONENTS = 50;
     public const MAX_UNRESOLVED = 100;
