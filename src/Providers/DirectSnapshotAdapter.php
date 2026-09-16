@@ -80,7 +80,7 @@ final class DirectSnapshotAdapter {
             'provider' => [
                 'key' => $registration['provider_key'],
                 'name' => $registration['name'],
-                'version' => $registration['provider_version'],
+                'version' => $this->sanitizer->version($registration['provider_version']),
                 'schema_version' => $registration['schema_version'],
                 'capabilities' => $registration['capabilities'],
             ],
