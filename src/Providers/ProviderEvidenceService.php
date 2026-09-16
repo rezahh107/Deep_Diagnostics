@@ -72,8 +72,9 @@ final class ProviderEvidenceService {
 
     public function captureDirect(string $providerKey): array {
         $providerKey = sanitize_key($providerKey);
-        $registration = $this->registry->get($providerKey);
-        if ( null === $registration ) {
+        $resolution = $this->registry->resolve($providerKey);
+        $registration = $resolution['provider'] ?? null;
+        if ( ! is_array($registration) ) {
             return $this->failure('direct_provider_unavailable', __('No compatible direct diagnostic provider is registered for this provider key.', 'wp-deep-diagnostics'));
         }
 
@@ -104,15 +105,12 @@ final class ProviderEvidenceService {
 
     public function diagnostics(string $providerKey, array $deepReport = []): array {
         $providerKey = sanitize_key($providerKey);
-        $discovery = $this->registry->discover();
-        $registration = $discovery['providers'][$providerKey] ?? null;
-        $registryError = null;
-        foreach ( $discovery['errors'] as $error ) {
-            if ( ($error['provider_key'] ?? null) === $providerKey || '' === ($error['provider_key'] ?? null) ) {
-                $registryError = $error['reason'] ?? 'provider_registration_error';
-                break;
-            }
-        }
+        $resolution = $this->registry->resolve($providerKey);
+        $registration = is_array($resolution['provider'] ?? null) ? $resolution['provider'] : null;
+        $blockingError = is_array($resolution['blocking_error'] ?? null) ? $resolution['blocking_error'] : null;
+        $registryError = is_string($blockingError['reason'] ?? null)
+            ? $blockingError['reason']
+            : null;
 
         try {
             $currentEntry = $this->store->current($providerKey);
