@@ -26,6 +26,24 @@ jobs:
           test "$actual_sha" = "$EXPECTED_SHA"
           echo "Exact checkout verified: $actual_sha"
 
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: composer:v2
+          coverage: none
+
+      - name: Install test dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Provider syntax and focused contract tests
+        run: |
+          set -euo pipefail
+          find src/Providers -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+          php -l templates/provider-diagnostics.php
+          php -l src/Admin/Admin_Page.php
+          php -l src/Diagnostics/Manager.php
+          vendor/bin/phpunit tests/ProviderEvidenceTest.php tests/AdminProviderActionTest.php tests/ProviderAdminMarkupTest.php
+
       - name: Build deterministic trial ZIP twice
         run: |
           set -euo pipefail
