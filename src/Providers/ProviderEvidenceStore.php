@@ -19,12 +19,21 @@ final class ProviderEvidenceStore {
     }
 
     public function save(array $snapshot): array {
-        $providerKey = is_string($snapshot['provider']['key'] ?? null) ? sanitize_key($snapshot['provider']['key']) : '';
-        if ( '' === $providerKey || ProviderContract::NORMALIZED_SCHEMA_VERSION !== ($snapshot['model_version'] ?? null) ) {
+        $rawProviderKey = $snapshot['provider']['key'] ?? null;
+        $providerKey = is_string($rawProviderKey) ? sanitize_key($rawProviderKey) : '';
+        if (
+            '' === $providerKey ||
+            $providerKey !== $rawProviderKey ||
+            ProviderContract::NORMALIZED_SCHEMA_VERSION !== ($snapshot['model_version'] ?? null)
+        ) {
             throw new \InvalidArgumentException('Invalid normalized provider snapshot.');
         }
 
         $snapshot = ( new Redactor() )->redact($snapshot);
+        if ( ! $this->isValidSnapshot($snapshot, $providerKey) ) {
+            throw new \InvalidArgumentException('Invalid normalized provider snapshot.');
+        }
+
         $fingerprint = $this->fingerprint($snapshot);
         $state = $this->loadState();
         $history = $state['providers'][$providerKey] ?? [];
@@ -50,7 +59,9 @@ final class ProviderEvidenceStore {
 
     public function history(string $providerKey): array {
         $providerKey = sanitize_key($providerKey);
-        if ( '' === $providerKey ) return [];
+        if ( '' === $providerKey ) {
+            return [];
+        }
         $state = $this->loadState();
         $history = $state['providers'][$providerKey] ?? [];
         return is_array($history) ? $history : [];
@@ -58,12 +69,12 @@ final class ProviderEvidenceStore {
 
     public function current(string $providerKey): ?array {
         $history = $this->history($providerKey);
-        return empty($history) ? null : (is_array($history[count($history) - 1]) ? $history[count($history) - 1] : null);
+        return empty($history) ? null : $history[count($history) - 1];
     }
 
     public function previous(string $providerKey): ?array {
         $history = $this->history($providerKey);
-        return count($history) < 2 ? null : (is_array($history[count($history) - 2]) ? $history[count($history) - 2] : null);
+        return count($history) < 2 ? null : $history[count($history) - 2];
     }
 
     public function comparison(string $providerKey): array {
@@ -72,12 +83,12 @@ final class ProviderEvidenceStore {
         if ( null === $current || null === $previous ) {
             return ['available' => false, 'reason' => 'previous_snapshot_unavailable', 'changes' => []];
         }
-        $currentSnapshot = $current['snapshot'] ?? null;
-        $previousSnapshot = $previous['snapshot'] ?? null;
-        if ( ! is_array($currentSnapshot) || ! is_array($previousSnapshot) ) {
-            return ['available' => false, 'reason' => 'snapshot_invalid', 'changes' => []];
-        }
-        if ( ($currentSnapshot['provider']['key'] ?? null) !== ($previousSnapshot['provider']['key'] ?? null) || ($currentSnapshot['source']['schema_version'] ?? null) !== ($previousSnapshot['source']['schema_version'] ?? null) ) {
+        $currentSnapshot = $current['snapshot'];
+        $previousSnapshot = $previous['snapshot'];
+        if (
+            ($currentSnapshot['provider']['key'] ?? null) !== ($previousSnapshot['provider']['key'] ?? null) ||
+            ($currentSnapshot['source']['schema_version'] ?? null) !== ($previousSnapshot['source']['schema_version'] ?? null)
+        ) {
             return ['available' => false, 'reason' => 'incompatible_snapshot_schema', 'changes' => []];
         }
 
@@ -90,12 +101,14 @@ final class ProviderEvidenceStore {
         $this->appendSetChanges('component', $previousSnapshot['current']['components'] ?? [], $currentSnapshot['current']['components'] ?? [], $changes);
         $this->appendSetChanges('unresolved_fact', $previousSnapshot['unresolved'] ?? [], $currentSnapshot['unresolved'] ?? [], $changes);
 
-        $previousIncidents = is_array($previousSnapshot['incidents'] ?? null) ? $previousSnapshot['incidents'] : [];
-        $currentIncidents = is_array($currentSnapshot['incidents'] ?? null) ? $currentSnapshot['incidents'] : [];
+        $previousIncidents = $previousSnapshot['incidents'] ?? [];
+        $currentIncidents = $currentSnapshot['incidents'] ?? [];
         $previousIncidentSet = array_fill_keys(array_map([$this, 'fingerprint'], $previousIncidents), true);
         $newIncidents = 0;
         foreach ( $currentIncidents as $incident ) {
-            if ( ! isset($previousIncidentSet[$this->fingerprint($incident)]) ) ++$newIncidents;
+            if ( ! isset($previousIncidentSet[$this->fingerprint($incident)]) ) {
+                ++$newIncidents;
+            }
         }
         if ( $newIncidents > 0 ) {
             $changes[] = ['kind' => 'new_incidents_observed', 'count' => $newIncidents];
@@ -128,16 +141,83 @@ final class ProviderEvidenceStore {
 
     private function loadState(): array {
         $state = get_option(ProviderContract::STORE_OPTION, null);
-        if ( null === $state || false === $state ) return $this->initialState();
+        if ( null === $state || false === $state ) {
+            return $this->initialState();
+        }
         if ( ! is_array($state) || self::STATE_SCHEMA_VERSION !== ($state['schema_version'] ?? null) || ! is_array($state['providers'] ?? null) ) {
             throw new \RuntimeException('Provider evidence state is corrupt.');
         }
         foreach ( $state['providers'] as $providerKey => $history ) {
-            if ( ! is_string($providerKey) || sanitize_key($providerKey) !== $providerKey || ! is_array($history) || count($history) > ProviderContract::MAX_HISTORY_PER_PROVIDER ) {
+            if (
+                ! is_string($providerKey) ||
+                '' === $providerKey ||
+                sanitize_key($providerKey) !== $providerKey ||
+                ! is_array($history) ||
+                count($history) > ProviderContract::MAX_HISTORY_PER_PROVIDER
+            ) {
                 throw new \RuntimeException('Provider evidence state is corrupt.');
+            }
+            foreach ( $history as $entry ) {
+                if ( ! $this->isValidEntry($entry, $providerKey) ) {
+                    throw new \RuntimeException('Provider evidence state is corrupt.');
+                }
             }
         }
         return $state;
+    }
+
+    private function isValidEntry(mixed $entry, string $providerKey): bool {
+        if (
+            ! is_array($entry) ||
+            ! is_string($entry['fingerprint'] ?? null) ||
+            1 !== preg_match('/^[a-f0-9]{64}$/', $entry['fingerprint']) ||
+            ! is_string($entry['ingested_at_utc'] ?? null) ||
+            ! is_array($entry['snapshot'] ?? null) ||
+            ! $this->isValidSnapshot($entry['snapshot'], $providerKey)
+        ) {
+            return false;
+        }
+        $ingested = \DateTimeImmutable::createFromFormat(\DateTimeInterface::ATOM, $entry['ingested_at_utc']);
+        if ( false === $ingested ) {
+            return false;
+        }
+        return hash_equals($entry['fingerprint'], $this->fingerprint($entry['snapshot']));
+    }
+
+    private function isValidSnapshot(array $snapshot, string $providerKey): bool {
+        if (
+            ProviderContract::NORMALIZED_SCHEMA_VERSION !== ($snapshot['model_version'] ?? null) ||
+            $providerKey !== ($snapshot['provider']['key'] ?? null) ||
+            ! is_array($snapshot['provider'] ?? null) ||
+            ! is_array($snapshot['source'] ?? null) ||
+            ! is_array($snapshot['environment'] ?? null) ||
+            ! is_array($snapshot['current'] ?? null) ||
+            ! is_array($snapshot['current']['components'] ?? null) ||
+            ! is_array($snapshot['unresolved'] ?? null) ||
+            ! is_array($snapshot['incidents'] ?? null) ||
+            ! is_array($snapshot['recent_success'] ?? null) ||
+            ! is_array($snapshot['privacy_boundary'] ?? null)
+        ) {
+            return false;
+        }
+        if (
+            count($snapshot['current']['components']) > ProviderContract::MAX_COMPONENTS ||
+            count($snapshot['unresolved']) > ProviderContract::MAX_UNRESOLVED ||
+            count($snapshot['incidents']) > ProviderContract::MAX_INCIDENTS ||
+            count($snapshot['recent_success']) > ProviderContract::MAX_RECENT_SUCCESS
+        ) {
+            return false;
+        }
+        $sourceTimestamp = $snapshot['source']['observed_at_utc'] ?? null;
+        if ( ! is_string($sourceTimestamp) || false === \DateTimeImmutable::createFromFormat(\DateTimeInterface::ATOM, $sourceTimestamp) ) {
+            return false;
+        }
+        foreach ( $snapshot['incidents'] as $incident ) {
+            if ( ! is_array($incident) || ! is_array($incident['events'] ?? null) || count($incident['events']) > ProviderContract::MAX_INCIDENT_EVENTS ) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private function persist(array $state): void {
@@ -159,10 +239,16 @@ final class ProviderEvidenceStore {
     }
 
     private function canonicalize(mixed $value): mixed {
-        if ( ! is_array($value) ) return $value;
-        if ( array_is_list($value) ) return array_map([$this, 'canonicalize'], $value);
+        if ( ! is_array($value) ) {
+            return $value;
+        }
+        if ( array_is_list($value) ) {
+            return array_map([$this, 'canonicalize'], $value);
+        }
         ksort($value, SORT_STRING);
-        foreach ( $value as $key => $child ) $value[$key] = $this->canonicalize($child);
+        foreach ( $value as $key => $child ) {
+            $value[$key] = $this->canonicalize($child);
+        }
         return $value;
     }
 }
