@@ -60,3 +60,15 @@
         width: auto;
     }
 }
+
+.wddtf-wrap .wddtf-inline-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-block-start: 12px;
+}
+
+.wddtf-wrap .wddtf-inline-actions .wddtf-action-form {
+    margin-block-start: 0;
+}
