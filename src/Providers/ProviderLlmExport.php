@@ -288,6 +288,22 @@ final class ProviderLlmExport {
 
     private function code(mixed $value): string {
         $text = is_scalar($value) ? (string) $value : 'unknown';
-        return '`' . str_replace('`', '\\`', $text) . '`';
+        $text = str_replace(
+            ["\r\n", "\r", "\n", "\t", "\u{0085}", "\u{2028}", "\u{2029}"],
+            ' ',
+            $text
+        );
+
+        $longestBacktickRun = 0;
+        if ( preg_match_all('/`+/', $text, $matches) ) {
+            foreach ( $matches[0] as $run ) {
+                $longestBacktickRun = max($longestBacktickRun, strlen($run));
+            }
+        }
+
+        $fence = str_repeat('`', $longestBacktickRun + 1);
+        $padding = str_starts_with($text, '`') || str_ends_with($text, '`') ? ' ' : '';
+
+        return $fence . $padding . $text . $padding . $fence;
     }
 }
