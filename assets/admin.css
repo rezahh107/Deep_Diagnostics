@@ -72,3 +72,7 @@
 .wddtf-wrap .wddtf-inline-actions .wddtf-action-form {
     margin-block-start: 0;
 }
+
+.wddtf-wrap .wddtf-llm-panel {
+    margin-block-start: 12px;
+}
