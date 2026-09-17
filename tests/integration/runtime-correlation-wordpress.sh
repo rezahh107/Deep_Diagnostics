@@ -116,7 +116,9 @@ if (null !== $d["data"]["ref"]) {
 ' "$ajax_json"
 echo "runtime correlation AJAX negative ok"
 
-# A real wp-cron.php root execution must remain unsupported.
+# A direct wp-cron.php request defines DOING_CRON before WordPress loads. Let Core acquire
+# its own cron lock so the scheduled callback actually runs, then distinguish a missing probe
+# result from the expected explicit NULL observation.
 (
     cd "$wp_dir"
     wp eval '
@@ -125,11 +127,15 @@ echo "runtime correlation AJAX negative ok"
         wp_schedule_single_event(time() - 1, "wddtf_ci_cron_correlation");
     '
 )
-curl -fsS "$base_url/wp-cron.php?doing_wp_cron=$(date +%s).123456" >/dev/null
+curl -fsS "$base_url/wp-cron.php" >/dev/null
 (
     cd "$wp_dir"
     wp eval '
-        if ("NULL" !== get_option("wddtf_ci_cron_ref")) {
+        $value = get_option("wddtf_ci_cron_ref", "__MISSING__");
+        if ("__MISSING__" === $value) {
+            fwrite(STDERR, "Cron probe callback was not observed\n"); exit(1);
+        }
+        if ("NULL" !== $value) {
             fwrite(STDERR, "Cron root execution exposed a correlation ref\n"); exit(1);
         }
         echo "runtime correlation Cron negative ok\n";
