@@ -45,11 +45,12 @@ jobs:
           php -l src/Diagnostics/ExecutionCorrelationContext.php
           php -l src/Diagnostics/Manager.php
           php -l tests/ExecutionCorrelationTest.php
+          php -l tests/execution-correlation-bootstrap.php
           php -l tests/fixtures/runtime-correlation-probe.php
           bash -n tests/integration/runtime-correlation-wordpress.sh
 
       - name: Focused execution-correlation regression
-        run: vendor/bin/phpunit tests/ExecutionCorrelationTest.php
+        run: vendor/bin/phpunit --bootstrap tests/execution-correlation-bootstrap.php tests/ExecutionCorrelationTest.php
 
   wordpress-runtime:
     name: Exact-head lifecycle / WordPress ${{ matrix.wordpress }} / PHP 8.1

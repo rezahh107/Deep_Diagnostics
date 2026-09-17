@@ -32,20 +32,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Use the canonical rest_route query variable so the test exercises Core's real
+# rest_api_loaded parse_request lifecycle even when the disposable site has no pretty permalinks.
 for _ in $(seq 1 40); do
-    if curl -fsS "$base_url/wp-json/" >/dev/null 2>&1; then
+    if curl -fsS "$base_url/?rest_route=/" >/dev/null 2>&1; then
         break
     fi
     sleep 0.25
 done
-curl -fsS "$base_url/wp-json/" >/dev/null
+curl -fsS "$base_url/?rest_route=/" >/dev/null
 
 # Reproduces PRI-FND-001 against a real standalone REST endpoint. The Provider-facing
 # accessor is called from inside the route callback, after WordPress has classified REST.
-rest_json="$(curl -fsS "$base_url/wp-json/wddtf-ci/v1/correlation")"
+rest_json="$(curl -fsS "$base_url/?rest_route=/wddtf-ci/v1/correlation")"
 php -r '
 $d = json_decode($argv[1], true);
-if (!is_array($d) || !array_key_exists("ref", $d) || null !== $d["ref"]) {
+if (!is_array($d) || !array_key_exists("ref", $d)) {
+    fwrite(STDERR, "standalone REST probe did not reach the registered endpoint\n");
+    exit(1);
+}
+if (null !== $d["ref"]) {
     fwrite(STDERR, "standalone REST exposed a correlation ref\n");
     exit(1);
 }
