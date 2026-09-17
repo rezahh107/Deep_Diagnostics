@@ -116,8 +116,9 @@ if (null !== $d["data"]["ref"]) {
 ' "$ajax_json"
 echo "runtime correlation AJAX negative ok"
 
-# A direct wp-cron.php request defines DOING_CRON before WordPress loads. Let Core acquire
-# its own cron lock so the scheduled callback actually runs, then distinguish a missing probe
+# A direct wp-cron.php request defines DOING_CRON before WordPress loads. Remove any stale
+# lock left by earlier HTTP requests in this disposable runtime so this invocation itself can
+# acquire Core's lock and execute the scheduled callback. Then distinguish a missing probe
 # result from the expected explicit NULL observation.
 (
     cd "$wp_dir"
@@ -125,6 +126,7 @@ echo "runtime correlation AJAX negative ok"
         delete_option("wddtf_ci_cron_ref");
         wp_clear_scheduled_hook("wddtf_ci_cron_correlation");
         wp_schedule_single_event(time() - 1, "wddtf_ci_cron_correlation");
+        delete_transient("doing_cron");
     '
 )
 curl -fsS "$base_url/wp-cron.php" >/dev/null
