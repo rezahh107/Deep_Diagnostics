@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0.0",
+  "bundle_type": "gpp.support_bundle",
+  "generated_at_utc": "2026-09-15T10:00:00+00:00",
+  "observed": {
+    "gpp": {"plugin": "Gravity Presentation Profiles", "version": "0.9.0-dev"},
+    "runtime": {"wordpress_version": "6.5.0", "php_version": "8.1.34", "gravity_forms_version": "3.1.1.1", "gravity_flow_version": "3.1.0"},
+    "active_profiles": [
+      {"surface": "print.dossier", "package_id": "sample-print-package", "package_version": "1.0.0", "profile_id": "sample-dossier", "artifact_type": "visual_profile", "schema_version": "1.0.0"},
+      {"surface": "gravity_flow.entry_detail", "package_id": "sample-entry-package", "package_version": "1.0.0", "profile_id": "sample-entry-detail", "artifact_type": "visual_profile", "schema_version": "1.0.0"}
+    ],
+    "binding_health": {
+      "schema_version": "1.0.0",
+      "contexts": [{
+        "context_key": "sample-context", "binding_set_id": "sample-bindings", "binding_set_version": "1.0.0", "form_id": 101,
+        "facts": [
+          {"semantic_slot_key": "student.full_name", "status": "unmapped", "reason": "binding_unbound", "binding_state": "UNBOUND", "source": null, "runtime_claims": []},
+          {"semantic_slot_key": "student.program", "status": "healthy", "reason": null, "binding_state": "PROVEN", "source": {"type": "gravity_forms.field", "field_id": 7}, "runtime_claims": [{"claim": "print_mapping", "evidence_state": "NOT_PROVEN"}]},
+          {"semantic_slot_key": "student.note", "status": "not_applicable", "reason": "binding_not_applicable", "binding_state": "NOT_APPLICABLE", "source": null, "runtime_claims": []}
+        ]
+      }]
+    },
+    "diagnostics": {
+      "schema_version": "1.0.0",
+      "recent_incidents": [
+        {"schema_version": "1.0.0", "surface": "print.dossier", "status": "FAIL", "events": [
+          {"seq": 1, "stage": "PRINT_DOSSIER_REQUEST", "result": "PASS", "reason_code": null, "fallback": null},
+          {"seq": 2, "stage": "HOST_PRINT_CONTEXT_ADMITTED", "result": "PASS", "reason_code": null, "fallback": null},
+          {"seq": 3, "stage": "PRINT_PROFILE_RESOLVED", "result": "FAIL", "reason_code": "print_surface_not_activated", "fallback": "dossier_not_rendered"}
+        ], "observed_at_utc": "2026-09-14T08:00:00+00:00"},
+        {"schema_version": "1.0.0", "surface": "gravity_flow.entry_detail", "status": "DEGRADED", "events": [
+          {"seq": 1, "stage": "ENTRY_DETAIL_HOST_SEAM", "result": "PASS", "reason_code": null, "fallback": null},
+          {"seq": 2, "stage": "ENTRY_DETAIL_PROFILE_RESOLUTION", "result": "PASS", "reason_code": null, "fallback": null},
+          {"seq": 3, "stage": "ENTRY_DETAIL_BINDING_READINESS", "result": "SKIP", "reason_code": "availability_not_proven", "fallback": "native_gravity_flow_entry_detail"}
+        ], "observed_at_utc": "2026-09-14T09:00:00+00:00"}
+      ],
+      "recent_success": {"gravity_flow.inbox": {"schema_version": "1.0.0", "surface": "gravity_flow.inbox", "status": "PASS", "events": [
+        {"seq": 1, "stage": "INBOX_PROFILE_RESOLUTION", "result": "PASS", "reason_code": null, "fallback": null},
+        {"seq": 2, "stage": "INBOX_BINDING_READINESS", "result": "PASS", "reason_code": null, "fallback": null},
+        {"seq": 3, "stage": "INBOX_PRESENTATION_OUTPUT", "result": "PASS", "reason_code": null, "fallback": null}
+      ], "observed_at_utc": "2026-09-15T09:55:00+00:00"}}
+    }
+  },
+  "unknown_or_unproven": [],
+  "privacy_boundary": {"submitted_entry_values": "OMITTED", "uploaded_file_names_and_contents": "OMITTED", "cookies_tokens_credentials_headers": "OMITTED", "absolute_server_paths": "OMITTED", "exception_messages_and_stack_arguments": "OMITTED"}
+}

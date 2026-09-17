@@ -12,6 +12,7 @@ use WDDTF\Cron\CronDiagnostics;
 use WDDTF\Gravity\GravityDiagnostics;
 use WDDTF\Logging\File_Logger;
 use WDDTF\Privacy\Redactor;
+use WDDTF\Providers\ProviderEvidenceService;
 use WDDTF\Support\Env;
 
 if ( ! defined('ABSPATH') ) {
@@ -28,11 +29,17 @@ final class Manager {
     private SystemInspector $system;
     private CronDiagnostics $cron;
     private GravityDiagnostics $gravity;
+    private ProviderEvidenceService $providers;
     private bool $finalized = false;
 
-    public function __construct(?CronDiagnostics $cron = null, ?GravityDiagnostics $gravity = null) {
+    public function __construct(
+        ?CronDiagnostics $cron = null,
+        ?GravityDiagnostics $gravity = null,
+        ?ProviderEvidenceService $providers = null
+    ) {
         $this->cron = $cron ?? new CronDiagnostics();
         $this->gravity = $gravity ?? new GravityDiagnostics();
+        $this->providers = $providers ?? new ProviderEvidenceService();
     }
 
     public function boot(): void {
@@ -125,6 +132,22 @@ final class Manager {
         return $this->presentGravityHostVersions($gravity);
     }
 
+    public function importGppSupportBundle(string $raw): array {
+        return $this->providers->importGppBundle($raw);
+    }
+
+    public function refreshDiagnosticProvider(string $providerKey): array {
+        return $this->providers->captureDirect($providerKey);
+    }
+
+    public function getProviderDiagnostics(string $providerKey = 'gpp'): array {
+        return $this->providers->diagnostics($providerKey, $this->getLastReport());
+    }
+
+    public function exportProviderEvidence(string $providerKey = 'gpp'): ?string {
+        return $this->providers->exportJson($providerKey, $this->getLastReport());
+    }
+
     public function finalize(): void {
         if ( $this->finalized ) {
             return;
@@ -191,7 +214,8 @@ final class Manager {
 
         // Redactor remains the centralized persisted/reporting privacy authority. Normal
         // reports cross it here; bounded cross-request diagnostic session data crosses the
-        // same Redactor before SessionStore persists it.
+        // same Redactor before SessionStore persists it. Provider evidence is acquired only
+        // through explicit admin actions and has its own allowlist + Redactor boundary.
         $snapshot = ( new Redactor() )->redact($snapshot);
 
         $analyzer = new DiagnosticsAnalyzer();
