@@ -5,6 +5,7 @@ namespace WDDTF;
 
 use WDDTF\Admin\Admin_Page;
 use WDDTF\Admin\Ajax_Controller;
+use WDDTF\Admin\ProviderLlmPanel;
 use WDDTF\Diagnostics\Manager;
 use WDDTF\Frontend\Frontend;
 use WDDTF\Rest\Routes;
@@ -24,6 +25,7 @@ final class Plugin {
             'init',
             function(): void {
                 ( new Admin_Page($this->manager) )->register();
+                ( new ProviderLlmPanel($this->manager) )->register();
                 ( new Ajax_Controller($this->manager) )->register();
                 ( new Routes($this->manager) )->register();
                 ( new Frontend($this->manager) )->register();
