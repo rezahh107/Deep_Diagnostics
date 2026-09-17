@@ -1,9 +1,9 @@
 <?php
 declare(strict_types=1);
 
-require __DIR__ . '/bootstrap.php';
+require __DIR__ . '/bootstrap-cas.php';
 
-// ProviderEvidenceStore's compare-and-swap test path requires the repository's wpdb stub.
-// The full suite happened to instantiate it in earlier tests; focused correlation coverage
-// must establish its own dependency so it is deterministic and order-independent.
+// ProviderEvidenceStore's compare-and-swap path needs the repository's CAS-capable wpdb
+// stub even when ExecutionCorrelationTest runs alone. The full suite must not be relied on
+// to supply test-order side effects.
 $GLOBALS['wpdb'] = new wpdb();
