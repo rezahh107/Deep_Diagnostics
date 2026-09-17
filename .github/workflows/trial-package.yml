@@ -39,10 +39,11 @@ jobs:
         run: |
           set -euo pipefail
           find src/Providers -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+          php -l src/Admin/ProviderLlmPanel.php
           php -l templates/provider-diagnostics.php
           php -l src/Admin/Admin_Page.php
           php -l src/Diagnostics/Manager.php
-          vendor/bin/phpunit tests/Provider00IntegrityRepairTest.php tests/Provider01ReadConsistencyTest.php tests/Provider02StaleLeaseCasTest.php tests/ProviderEvidenceTest.php tests/ProviderForwardCompatibilityTest.php tests/AdminProviderActionTest.php tests/ProviderAdminMarkupTest.php
+          vendor/bin/phpunit tests/Provider00IntegrityRepairTest.php tests/Provider01ReadConsistencyTest.php tests/Provider02StaleLeaseCasTest.php tests/ProviderEvidenceTest.php tests/ProviderForwardCompatibilityTest.php tests/AdminProviderActionTest.php tests/ProviderAdminMarkupTest.php tests/ProviderLlmExportTest.php tests/ProviderLlmPanelTest.php
 
       - name: Build deterministic trial ZIP twice
         run: |
@@ -59,13 +60,13 @@ jobs:
       - name: Verify trial build identity
         run: |
           set -euo pipefail
-          unzip -p dist/wp-deep-diagnostics.zip wp-deep-diagnostics/wp-deep-diagnostics.php | grep -q 'Version: 1.6.0-beta.1'
-          unzip -p dist/wp-deep-diagnostics.zip wp-deep-diagnostics/wp-deep-diagnostics.php | grep -q "WDDTF_VERSION', '1.6.0-beta.1'"
+          unzip -p dist/wp-deep-diagnostics.zip wp-deep-diagnostics/wp-deep-diagnostics.php | grep -q 'Version: 1.6.0-beta.2'
+          unzip -p dist/wp-deep-diagnostics.zip wp-deep-diagnostics/wp-deep-diagnostics.php | grep -q "WDDTF_VERSION', '1.6.0-beta.2'"
 
       - name: Upload exact-head trial artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wp-deep-diagnostics-1.6.0-beta.1-${{ github.event.pull_request.head.sha }}
+          name: wp-deep-diagnostics-1.6.0-beta.2-${{ github.event.pull_request.head.sha }}
           path: |
             dist/wp-deep-diagnostics.zip
             dist/wp-deep-diagnostics.zip.sha256
