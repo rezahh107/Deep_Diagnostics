@@ -100,8 +100,16 @@ echo "runtime correlation admin-post positive ok"
 ajax_json="$(curl -fsS "$base_url/wp-admin/admin-ajax.php?action=wddtf_ci_correlation")"
 php -r '
 $d = json_decode($argv[1], true);
-$ref = is_array($d) ? ($d["data"]["ref"] ?? "missing") : "missing";
-if (null !== $ref) {
+if (
+    !is_array($d) ||
+    true !== ($d["success"] ?? null) ||
+    !is_array($d["data"] ?? null) ||
+    !array_key_exists("ref", $d["data"])
+) {
+    fwrite(STDERR, "admin AJAX probe did not reach the registered endpoint\n");
+    exit(1);
+}
+if (null !== $d["data"]["ref"]) {
     fwrite(STDERR, "admin AJAX was promoted to supported correlation\n");
     exit(1);
 }
