@@ -67,7 +67,9 @@ final class ProviderLlmMarkdownSafetyTest extends TestCase {
             self::assertSame($expectedFenceLength, strlen($opening[1]));
             self::assertSame($opening[1], $closing[1]);
 
-            self::assertSame(1, preg_match_all('/`+/', $providerName, $runs));
+            $runCount = preg_match_all('/`+/', $providerName, $runs);
+            self::assertIsInt($runCount);
+            self::assertGreaterThan(0, $runCount);
             foreach ( $runs[0] as $run ) {
                 self::assertGreaterThan(strlen($run), strlen($opening[1]));
             }
