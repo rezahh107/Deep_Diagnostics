@@ -1,0 +1,121 @@
+name: Exact execution correlation lifecycle
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  focused-unit:
+    name: Exact-head focused correlation / PHP 8.1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact triggering revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Verify exact checkout identity
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
+            echo "Expected exact Head $EXPECTED_SHA but checked out $actual_sha" >&2
+            exit 1
+          fi
+          echo "Exact checkout verified: $actual_sha"
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: composer:v2
+          coverage: none
+
+      - run: composer install --no-interaction --prefer-dist
+
+      - name: Syntax
+        run: |
+          set -euo pipefail
+          php -l src/Diagnostics/ExecutionCorrelationContext.php
+          php -l src/Diagnostics/Manager.php
+          php -l tests/ExecutionCorrelationTest.php
+          php -l tests/execution-correlation-bootstrap.php
+          php -l tests/fixtures/runtime-correlation-probe.php
+          bash -n tests/integration/runtime-correlation-wordpress.sh
+
+      - name: Focused execution-correlation regression
+        run: vendor/bin/phpunit --bootstrap tests/execution-correlation-bootstrap.php tests/ExecutionCorrelationTest.php
+
+  wordpress-runtime:
+    name: Exact-head lifecycle / WordPress ${{ matrix.wordpress }} / PHP 8.1
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        wordpress: ['6.5', 'latest']
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: wordpress
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Checkout exact triggering revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Verify exact checkout identity
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
+            echo "Expected exact Head $EXPECTED_SHA but checked out $actual_sha" >&2
+            exit 1
+          fi
+          echo "Exact checkout verified: $actual_sha"
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: wp-cli
+          coverage: none
+
+      - name: Build installable plugin
+        run: python3 create_fixed_plugin.py
+
+      - name: Install WordPress
+        env:
+          WP_VERSION: ${{ matrix.wordpress }}
+        run: |
+          set -euo pipefail
+          mkdir wordpress
+          cd wordpress
+          if [ "$WP_VERSION" = latest ]; then
+            wp core download --quiet
+          else
+            wp core download --version="$WP_VERSION" --quiet
+          fi
+          wp config create --dbname=wordpress --dbuser=root --dbpass=root --dbhost=127.0.0.1:3306 --skip-check --quiet
+          wp core install --url=http://example.test --title='Deep Diagnostics Correlation CI' --admin_user=admin --admin_password='ci-password' --admin_email=admin@example.test --skip-email --quiet
+          unzip -q ../dist/wp-deep-diagnostics.zip -d wp-content/plugins
+          wp plugin activate wp-deep-diagnostics
+
+      - name: Exercise real request-classification boundaries
+        run: tests/integration/runtime-correlation-wordpress.sh "$PWD/wordpress"

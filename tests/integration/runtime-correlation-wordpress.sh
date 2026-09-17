@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+wp_dir="${1:-$repo_root/wordpress}"
+base_url="http://127.0.0.1:8080"
+
+mkdir -p "$wp_dir/wp-content/mu-plugins"
+cp "$repo_root/tests/fixtures/runtime-correlation-probe.php" \
+   "$wp_dir/wp-content/mu-plugins/wddtf-runtime-correlation-probe.php"
+
+(
+    cd "$wp_dir"
+    wp option update home "$base_url" --quiet
+    wp option update siteurl "$base_url" --quiet
+)
+
+cat > "$wp_dir/.wddtf-ci-router.php" <<'PHP'
+<?php
+$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+$file = __DIR__ . ($path ?: '/');
+if ('/' !== $path && is_file($file)) {
+    return false;
+}
+require __DIR__ . '/index.php';
+PHP
+
+php -S 127.0.0.1:8080 -t "$wp_dir" "$wp_dir/.wddtf-ci-router.php" > "$repo_root/runtime-correlation-server.log" 2>&1 &
+server_pid=$!
+cleanup() {
+    kill "$server_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# Use the canonical rest_route query variable so the test exercises Core's real
+# rest_api_loaded parse_request lifecycle even when the disposable site has no pretty permalinks.
+for _ in $(seq 1 40); do
+    if curl -fsS "$base_url/?rest_route=/" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.25
+done
+curl -fsS "$base_url/?rest_route=/" >/dev/null
+
+# Reproduces PRI-FND-001 against a real standalone REST endpoint. The Provider-facing
+# accessor is called from inside the route callback, after WordPress has classified REST.
+rest_json="$(curl -fsS "$base_url/?rest_route=/wddtf-ci/v1/correlation")"
+php -r '
+$d = json_decode($argv[1], true);
+if (!is_array($d) || !array_key_exists("ref", $d)) {
+    fwrite(STDERR, "standalone REST probe did not reach the registered endpoint\n");
+    exit(1);
+}
+if (null !== $d["ref"]) {
+    fwrite(STDERR, "standalone REST exposed a correlation ref\n");
+    exit(1);
+}
+' "$rest_json"
+echo "runtime correlation REST negative ok"
+
+# Ordinary front-controller execution crosses parse_request after Core's REST loader.
+front_json="$(curl -fsS "$base_url/?wddtf_ci_front=1")"
+front_ref="$(php -r '
+$d = json_decode($argv[1], true);
+$ref = is_array($d) ? ($d["ref"] ?? null) : null;
+if (!is_string($ref) || 1 !== preg_match("/^dx1_[A-Za-z0-9_-]{16}$/D", $ref)) {
+    fwrite(STDERR, "ordinary front request missing valid correlation ref\n");
+    exit(1);
+}
+echo $ref;
+' "$front_json")"
+(
+    cd "$wp_dir"
+    FRONT_REF="$front_ref" wp eval '
+        $front = getenv("FRONT_REF");
+        if ($front !== get_option("wddtf_ci_front_ref")) {
+            fwrite(STDERR, "front callback reference mismatch\n"); exit(1);
+        }
+        $report = get_transient("wddtf_last_report");
+        if (!is_array($report) || $front !== ($report["meta"]["execution_correlation_ref"] ?? null)) {
+            fwrite(STDERR, "front finalized report reference mismatch\n"); exit(1);
+        }
+        echo "ordinary front correlation retained\n";
+    '
+)
+
+# admin_init must establish the reference before admin-post/provider-facing actions execute.
+admin_json="$(curl -fsS "$base_url/wp-admin/admin-post.php?action=wddtf_ci_correlation")"
+php -r '
+$d = json_decode($argv[1], true);
+$ref = is_array($d) ? ($d["ref"] ?? null) : null;
+if (!is_string($ref) || 1 !== preg_match("/^dx1_[A-Za-z0-9_-]{16}$/D", $ref)) {
+    fwrite(STDERR, "admin-post callback missing supported correlation ref\n");
+    exit(1);
+}
+' "$admin_json"
+echo "runtime correlation admin-post positive ok"
+
+# admin_init also fires for admin-ajax.php, but AJAX was already authoritatively unsupported.
+ajax_json="$(curl -fsS "$base_url/wp-admin/admin-ajax.php?action=wddtf_ci_correlation")"
+php -r '
+$d = json_decode($argv[1], true);
+if (
+    !is_array($d) ||
+    true !== ($d["success"] ?? null) ||
+    !is_array($d["data"] ?? null) ||
+    !array_key_exists("ref", $d["data"])
+) {
+    fwrite(STDERR, "admin AJAX probe did not reach the registered endpoint\n");
+    exit(1);
+}
+if (null !== $d["data"]["ref"]) {
+    fwrite(STDERR, "admin AJAX was promoted to supported correlation\n");
+    exit(1);
+}
+' "$ajax_json"
+echo "runtime correlation AJAX negative ok"
+
+# A direct wp-cron.php request defines DOING_CRON before WordPress loads. Remove any stale
+# lock left by earlier HTTP requests in this disposable runtime so this invocation itself can
+# acquire Core's lock and execute the scheduled callback. Then distinguish a missing probe
+# result from the expected explicit NULL observation.
+(
+    cd "$wp_dir"
+    wp eval '
+        delete_option("wddtf_ci_cron_ref");
+        wp_clear_scheduled_hook("wddtf_ci_cron_correlation");
+        wp_schedule_single_event(time() - 1, "wddtf_ci_cron_correlation");
+        delete_transient("doing_cron");
+    '
+)
+curl -fsS "$base_url/wp-cron.php" >/dev/null
+(
+    cd "$wp_dir"
+    wp eval '
+        $value = get_option("wddtf_ci_cron_ref", "__MISSING__");
+        if ("__MISSING__" === $value) {
+            fwrite(STDERR, "Cron probe callback was not observed\n"); exit(1);
+        }
+        if ("NULL" !== $value) {
+            fwrite(STDERR, "Cron root execution exposed a correlation ref\n"); exit(1);
+        }
+        echo "runtime correlation Cron negative ok\n";
+    '
+)
+
+# WP-CLI does not traverse parse_request/admin_init. The context must stay unavailable to
+# same-execution callers, then finalization may establish identity only for the retained report.
+(
+    cd "$wp_dir"
+    wp eval '
+        delete_transient("wddtf_last_report");
+        if (null !== \WDDTF\Providers\ProviderRuntimeContext::currentExecutionCorrelationRef()) {
+            fwrite(STDERR, "fallback execution exposed a pre-finalize correlation ref\n"); exit(1);
+        }
+        echo "fallback pre-finalize accessor null\n";
+    '
+    wp eval '
+        $report = get_transient("wddtf_last_report");
+        $ref = is_array($report) ? ($report["meta"]["execution_correlation_ref"] ?? null) : null;
+        if (!is_string($ref) || 1 !== preg_match("/^dx1_[A-Za-z0-9_-]{16}$/D", $ref)) {
+            fwrite(STDERR, "fallback finalization did not retain valid correlation ref\n"); exit(1);
+        }
+        echo "runtime correlation finalization fallback ok\n";
+    '
+)

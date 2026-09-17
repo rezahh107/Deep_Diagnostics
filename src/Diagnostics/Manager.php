@@ -20,6 +20,8 @@ if ( ! defined('ABSPATH') ) {
 }
 
 final class Manager {
+    private const MAX_EXECUTION_RELATIONSHIPS = 8;
+
     private float $startedAt;
     private int $startedMemory;
     private EventCollector $events;
@@ -30,13 +32,17 @@ final class Manager {
     private CronDiagnostics $cron;
     private GravityDiagnostics $gravity;
     private ProviderEvidenceService $providers;
+    private ExecutionCorrelationContext $executionCorrelation;
+    private array $executionRelationships = [];
     private bool $finalized = false;
 
     public function __construct(
         ?CronDiagnostics $cron = null,
         ?GravityDiagnostics $gravity = null,
-        ?ProviderEvidenceService $providers = null
+        ?ProviderEvidenceService $providers = null,
+        ?ExecutionCorrelationContext $executionCorrelation = null
     ) {
+        $this->executionCorrelation = $executionCorrelation ?? new ExecutionCorrelationContext();
         $this->cron = $cron ?? new CronDiagnostics();
         $this->gravity = $gravity ?? new GravityDiagnostics();
         $this->providers = $providers ?? new ProviderEvidenceService();
@@ -45,6 +51,40 @@ final class Manager {
     public function boot(): void {
         $this->startedAt     = microtime(true);
         $this->startedMemory = memory_get_usage(true);
+
+        // plugins_loaded is too early to classify a front-controller request as non-REST:
+        // WordPress defines REST_REQUEST later from its parse_request REST loader. Make the
+        // request-local context available now, but leave it unresolved unless an exclusion
+        // (AJAX/Cron, or an already-known REST request) is authoritative at this point.
+        $this->executionCorrelation->activate();
+        if ( $this->isKnownUnsupportedExecution() ) {
+            $this->executionCorrelation->markUnsupported();
+        }
+
+        // admin_init is authoritative for ordinary wp-admin/admin-post execution. It also
+        // runs for admin-ajax.php, so an AJAX context marked unsupported above must never be
+        // promoted by this later callback.
+        add_action(
+            'admin_init',
+            function(): void {
+                $this->resolveExecutionCorrelationAtAdminInit();
+            },
+            0
+        );
+
+        // Core registers rest_api_loaded on parse_request at the default priority 10. A
+        // standalone REST request is dispatched and terminated there, before this priority
+        // 20 resolver can promote the context. Ordinary parsed front-controller requests
+        // that survive that boundary can be promoted here.
+        add_action(
+            'parse_request',
+            function(mixed $wp = null): void {
+                $this->resolveExecutionCorrelationAfterParseRequest();
+            },
+            20,
+            1
+        );
+
         $this->events        = new EventCollector();
         $this->http          = new HttpCollector();
         $this->queries       = new QueryCollector();
@@ -111,7 +151,15 @@ final class Manager {
     }
 
     public function startCronQualification(): array {
-        return $this->cron->startQualification();
+        $result = $this->cron->startQualification();
+        if ( ! empty($result['started']) ) {
+            $this->rememberExecutionRelationship(
+                'cron_qualification_session_created',
+                $result['qualification']['session_id'] ?? null
+            );
+        }
+
+        return $result;
     }
 
     public function getCronDiagnostics(): array {
@@ -119,7 +167,15 @@ final class Manager {
     }
 
     public function startGravityDiagnostic(): array {
-        return $this->gravity->startDiagnostic();
+        $result = $this->gravity->startDiagnostic();
+        if ( ! empty($result['started']) ) {
+            $this->rememberExecutionRelationship(
+                'gravity_diagnostic_session_created',
+                $result['observation']['session_id'] ?? null
+            );
+        }
+
+        return $result;
     }
 
     public function startGravityFlowInboxObservation(): array {
@@ -174,6 +230,12 @@ final class Manager {
             return;
         }
 
+        // Some supported ordinary entry points (for example WP-CLI-backed evidence checks)
+        // do not traverse parse_request or admin_init. Only after the ordinary-report guards
+        // above have authoritatively passed may an unresolved context be promoted here. This
+        // creates retained report identity; it does not retroactively claim earlier Provider
+        // access to a reference that was unavailable at that earlier point.
+        $this->executionCorrelation->support();
         $this->finalized = true;
 
         $timeline  = $this->events->snapshot();
@@ -187,21 +249,23 @@ final class Manager {
 
         $snapshot = [
             'meta'          => [
-                'version'      => WDDTF_VERSION,
-                'timestamp'    => gmdate('c'),
-                'elapsed_ms'   => round($elapsed, 2),
-                'memory_peak'  => memory_get_peak_usage(true),
-                'memory_delta' => memory_get_peak_usage(true) - $this->startedMemory,
-                'php_version'  => PHP_VERSION,
-                'wp_version'   => get_bloginfo('version'),
-                'admin'        => is_admin(),
-                'context'      => [
+                'version'                       => WDDTF_VERSION,
+                'timestamp'                     => gmdate('c'),
+                'elapsed_ms'                    => round($elapsed, 2),
+                'memory_peak'                   => memory_get_peak_usage(true),
+                'memory_delta'                  => memory_get_peak_usage(true) - $this->startedMemory,
+                'php_version'                   => PHP_VERSION,
+                'wp_version'                    => get_bloginfo('version'),
+                'admin'                         => is_admin(),
+                'execution_correlation_ref'     => $this->executionCorrelation->current(),
+                'exact_reference_relationships' => $this->executionRelationships,
+                'context'                       => [
                     'is_ajax' => wp_doing_ajax(),
                     'is_rest' => defined('REST_REQUEST') && REST_REQUEST,
                     'is_cron' => defined('DOING_CRON') && DOING_CRON,
                 ],
-                'theme'        => Env::activeTheme(),
-                'opcache'      => Env::opcache(),
+                'theme'                         => Env::activeTheme(),
+                'opcache'                       => Env::opcache(),
             ],
             'timeline'      => $timeline,
             'http_requests' => $httpData,
@@ -234,6 +298,55 @@ final class Manager {
         $report = get_transient('wddtf_last_report');
 
         return is_array($report) ? $report : [];
+    }
+
+    private function rememberExecutionRelationship(string $kind, mixed $reference): void {
+        $executionRef = $this->executionCorrelation->current();
+        if (
+            null === $executionRef ||
+            ! is_string($reference) ||
+            '' === $reference ||
+            strlen($reference) > 128 ||
+            count($this->executionRelationships) >= self::MAX_EXECUTION_RELATIONSHIPS
+        ) {
+            return;
+        }
+
+        foreach ( $this->executionRelationships as $relationship ) {
+            if ( ($relationship['kind'] ?? null) === $kind && ($relationship['reference'] ?? null) === $reference ) {
+                return;
+            }
+        }
+
+        $this->executionRelationships[] = [
+            'kind' => $kind,
+            'execution_correlation_ref' => $executionRef,
+            'reference' => $reference,
+        ];
+    }
+
+    private function resolveExecutionCorrelationAtAdminInit(): void {
+        if ( $this->isKnownUnsupportedExecution() ) {
+            $this->executionCorrelation->markUnsupported();
+            return;
+        }
+
+        $this->executionCorrelation->support();
+    }
+
+    private function resolveExecutionCorrelationAfterParseRequest(): void {
+        if ( $this->isKnownUnsupportedExecution() ) {
+            $this->executionCorrelation->markUnsupported();
+            return;
+        }
+
+        $this->executionCorrelation->support();
+    }
+
+    private function isKnownUnsupportedExecution(): bool {
+        return wp_doing_ajax()
+            || (defined('REST_REQUEST') && REST_REQUEST)
+            || (defined('DOING_CRON') && DOING_CRON);
     }
 
     private function presentGravityHostVersions(array $gravity): array {

@@ -383,16 +383,17 @@ final class ProviderEvidenceService {
                 'exact' => false,
                 'linked' => false,
                 'reason' => 'exact_correlation_ref_absent',
-                'meaning' => __('No exact compatible correlation reference was supplied. Provider and DEEP evidence may be viewed together only as context; causal linkage is not proven.', 'wp-deep-diagnostics'),
+                'meaning' => __('This Provider information is useful context, but no exact compatible correlation reference was supplied, so it is not proven to belong to the same DEEP request or execution. Timestamp proximity is not used as a substitute.', 'wp-deep-diagnostics'),
             ];
         }
         foreach ( $this->deepCorrelationReferences($deepReport) as $candidate ) {
-            if ( hash_equals($candidate, $reference) ) {
+            if ( hash_equals($candidate['reference'], $reference) ) {
                 return [
                     'exact' => true,
                     'linked' => true,
                     'reason' => 'exact_reference_match',
-                    'meaning' => __('The provider supplied an exact reference that matches retained DEEP evidence. Only that explicitly matched evidence is correlated.', 'wp-deep-diagnostics'),
+                    'matched_source' => $candidate['source'],
+                    'meaning' => __('This Provider evidence is exactly linked to one retained Deep Diagnostics reference. The match proves only the explicit linkage; it does not prove omitted Provider stages, browser-visible outcome, that historical evidence is current, or Provider business correctness.', 'wp-deep-diagnostics'),
                 ];
             }
         }
@@ -400,30 +401,53 @@ final class ProviderEvidenceService {
             'exact' => true,
             'linked' => false,
             'reason' => 'exact_reference_not_found',
-            'meaning' => __('The provider supplied an exact correlation reference, but no matching retained DEEP evidence is available. DEEP does not substitute timestamp proximity.', 'wp-deep-diagnostics'),
+            'meaning' => __('The Provider supplied an exact correlation reference, but no matching retained DEEP evidence is available. DEEP does not substitute timestamp proximity, so same-execution linkage remains unproven.', 'wp-deep-diagnostics'),
         ];
     }
 
     private function deepCorrelationReferences(array $report): array {
         $references = [];
-        $cron = $report['layers']['cron']['qualification']['session_id'] ?? null;
-        if ( is_string($cron) && '' !== $cron ) {
-            $references[] = $cron;
-        }
+        $this->addDeepCorrelationReference(
+            $references,
+            $report['meta']['execution_correlation_ref'] ?? null,
+            'deep_execution'
+        );
+        $this->addDeepCorrelationReference(
+            $references,
+            $report['layers']['cron']['qualification']['session_id'] ?? null,
+            'cron_qualification_session'
+        );
         $gravity = $report['layers']['gravity']['inbox_observation'] ?? [];
-        $gravitySession = $gravity['session_id'] ?? null;
-        if ( is_string($gravitySession) && '' !== $gravitySession ) {
-            $references[] = $gravitySession;
-        }
-        if ( is_array($gravity['traces'] ?? null) ) {
+        $this->addDeepCorrelationReference(
+            $references,
+            is_array($gravity) ? ($gravity['session_id'] ?? null) : null,
+            'gravity_diagnostic_session'
+        );
+        if ( is_array($gravity) && is_array($gravity['traces'] ?? null) ) {
             foreach ( $gravity['traces'] as $trace ) {
-                $ref = is_array($trace) ? ($trace['trace_ref'] ?? null) : null;
-                if ( is_string($ref) && '' !== $ref ) {
-                    $references[] = $ref;
-                }
+                $this->addDeepCorrelationReference(
+                    $references,
+                    is_array($trace) ? ($trace['trace_ref'] ?? null) : null,
+                    'gravity_trace'
+                );
             }
         }
-        return array_values(array_unique($references));
+
+        return array_values($references);
+    }
+
+    private function addDeepCorrelationReference(array &$references, mixed $reference, string $source): void {
+        if ( ! is_string($reference) || '' === $reference ) {
+            return;
+        }
+
+        $key = hash('sha256', $reference);
+        if ( ! isset($references[$key]) ) {
+            $references[$key] = [
+                'reference' => $reference,
+                'source' => $source,
+            ];
+        }
     }
 
     private function storageFailureDiagnostics(string $providerKey, ?array $registration, ?string $registryError): array {

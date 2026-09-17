@@ -33,6 +33,8 @@ final class Report_Builder {
             '- ' . __('Elapsed', 'wp-deep-diagnostics') . ': ' . ($meta['elapsed_ms'] ?? 0) . ' ms',
             '- ' . __('PHP', 'wp-deep-diagnostics') . ': ' . ($meta['php_version'] ?? ''),
             '- ' . __('Context', 'wp-deep-diagnostics') . ': ' . wp_json_encode($meta['context'] ?? []),
+            '- ' . __('Execution correlation reference', 'wp-deep-diagnostics') . ': ' . ($meta['execution_correlation_ref'] ?? 'n/a'),
+            '- ' . __('Exact reference relationships', 'wp-deep-diagnostics') . ': ' . wp_json_encode($meta['exact_reference_relationships'] ?? []),
             '- ' . __('Top bottleneck', 'wp-deep-diagnostics') . ': ' . ($top['name'] ?? 'n/a'),
             '',
             '## ' . __('Evidence-first synthesis', 'wp-deep-diagnostics'),
