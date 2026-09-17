@@ -57,6 +57,26 @@ The generic direct snapshot admits only bounded metadata:
 
 Incident records use provider-owned `stage`, `result`, `reason_code`, and `fallback` tokens. DEEP preserves admitted event order, selects the first supplied `FAIL`/`SKIP` boundary, and does not infer missing stages or duplicate provider business logic.
 
+## Same-execution correlation for cooperating Providers
+
+For a supported ordinary DEEP-observed PHP execution, Deep Diagnostics establishes one immutable opaque execution correlation reference. The current implementation uses the form `dx1_` followed by 16 URL-safe random characters (96 random bits; 20 characters total). Providers **must treat the value as opaque** and must not parse or derive meaning from its current format.
+
+A cooperating Provider may read the current value during that same PHP execution through the read-only public accessor:
+
+```php
+$correlationRef = class_exists(\WDDTF\Providers\ProviderRuntimeContext::class)
+    ? \WDDTF\Providers\ProviderRuntimeContext::currentExecutionCorrelationRef()
+    : null;
+```
+
+The accessor does not invoke Provider callbacks, inspect Provider options/database state, or mutate Provider state. It returns `null` when DEEP has no supported ordinary execution context, including request classes whose normal DEEP report is intentionally not finalized. A Provider must not invent a replacement value when the accessor returns `null`.
+
+When a Provider is already recording privacy-safe runtime or incident evidence in the same PHP execution, it may retain the exact opaque value unchanged and later return that same value as its snapshot or incident `correlation_ref`. Providers must never turn this value into a user or business identifier and must never place usernames, Entry/Form IDs, URLs, IP addresses, cookies, nonces, timestamps, database IDs, submitted values, credentials, secrets, or other PII into `correlation_ref`.
+
+An exact match proves only that the Provider evidence explicitly carried the same retained reference as a concrete DEEP evidence item. DEEP may also report the matched evidence class (for example `deep_execution`, `cron_qualification_session`, `gravity_diagnostic_session`, or `gravity_trace`). The match does **not** prove that omitted Provider stages occurred, that a browser-visible outcome happened, that historical evidence is current, or that the Provider's business interpretation is correct. Provider evidence remains Provider evidence; DEEP evidence remains DEEP evidence.
+
+If no exact reference is available, Provider and DEEP evidence may still be useful side-by-side context, but same-request/same-execution causality is **not proven**. DEEP never substitutes timestamp proximity. Snapshot-only Providers are not required to implement runtime correlation, and the GPP Support Bundle fallback remains valid without it.
+
 ## Privacy and ownership requirements
 
 The callback must be read-only and privacy-safe before DEEP receives its result. Do not expose submitted form values, names, national IDs, phone numbers, emails, uploaded file names or contents, cookies, tokens, credentials, sensitive headers, raw request/response bodies, absolute server paths, raw host/form identifiers, or exception argument values.
