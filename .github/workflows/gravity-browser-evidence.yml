@@ -232,6 +232,10 @@ jobs:
                           }
                       });
 
+                      refresh.always(function () {
+                          window.__wddtfFixtureRefreshCompletedAt = Date.now();
+                      });
+
                       if (mode === 'pre') {
                           window.setTimeout(function () {
                               document.title = 'WDDTF pre-response unrelated mutation';
@@ -341,7 +345,6 @@ jobs:
 
             const unrelated = await unrelatedPromise;
             const refresh = await refreshPromise;
-            const refreshObservedAt = Date.now();
             const evidence = await evidencePromise;
 
             if (unrelated.headers()['x-wddtf-gravity-sample']) {
@@ -362,8 +365,16 @@ jobs:
             const postData = evidence.request().postData() || '';
             const params = new URLSearchParams(postData);
             const clientReceivedMs = Number(params.get('client_received_ms'));
-            if (!Number.isFinite(clientReceivedMs) || Math.abs(clientReceivedMs - refreshObservedAt) > 150) {
-              throw new Error('client receipt timestamp was not captured at response completion');
+            const fixtureRefreshCompletedAt = await page.evaluate(() => window.__wddtfFixtureRefreshCompletedAt ?? null);
+            if (
+              !Number.isFinite(clientReceivedMs)
+              || !Number.isFinite(fixtureRefreshCompletedAt)
+              || Math.abs(clientReceivedMs - fixtureRefreshCompletedAt) > 150
+            ) {
+              throw new Error(
+                'client receipt timestamp was not captured at response completion'
+                + ' (client=' + clientReceivedMs + ', fixture=' + fixtureRefreshCompletedAt + ')'
+              );
             }
             if (evidenceRequestSeenAt === null || evidenceRequestSeenAt - clientReceivedMs < 50) {
               throw new Error('client receipt timestamp appears to have been created at delayed evidence-post time');
@@ -409,7 +420,7 @@ jobs:
               await page.waitForFunction(() => document.querySelector('#wddtf-browser-fixture-status')?.getAttribute('data-updated') === '1');
             }
 
-            console.log(JSON.stringify({mode, sampleRef, expectedUi, expectedOutcome, clientReceivedMs, evidenceRequestSeenAt}));
+            console.log(JSON.stringify({mode, sampleRef, expectedUi, expectedOutcome, clientReceivedMs, fixtureRefreshCompletedAt, evidenceRequestSeenAt}));
             await browser.close();
           })().catch((error) => {
             console.error(error);
