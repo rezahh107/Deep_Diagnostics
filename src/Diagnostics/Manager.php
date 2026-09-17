@@ -20,6 +20,8 @@ if ( ! defined('ABSPATH') ) {
 }
 
 final class Manager {
+    private const MAX_EXECUTION_RELATIONSHIPS = 8;
+
     private float $startedAt;
     private int $startedMemory;
     private EventCollector $events;
@@ -31,6 +33,7 @@ final class Manager {
     private GravityDiagnostics $gravity;
     private ProviderEvidenceService $providers;
     private ExecutionCorrelationContext $executionCorrelation;
+    private array $executionRelationships = [];
     private bool $finalized = false;
 
     public function __construct(
@@ -41,7 +44,7 @@ final class Manager {
     ) {
         $this->executionCorrelation = $executionCorrelation ?? new ExecutionCorrelationContext();
         $this->cron = $cron ?? new CronDiagnostics();
-        $this->gravity = $gravity ?? new GravityDiagnostics(null, null, null, null, $this->executionCorrelation);
+        $this->gravity = $gravity ?? new GravityDiagnostics();
         $this->providers = $providers ?? new ProviderEvidenceService();
     }
 
@@ -115,7 +118,15 @@ final class Manager {
     }
 
     public function startCronQualification(): array {
-        return $this->cron->startQualification();
+        $result = $this->cron->startQualification();
+        if ( ! empty($result['started']) ) {
+            $this->rememberExecutionRelationship(
+                'cron_qualification_session_created',
+                $result['qualification']['session_id'] ?? null
+            );
+        }
+
+        return $result;
     }
 
     public function getCronDiagnostics(): array {
@@ -123,7 +134,15 @@ final class Manager {
     }
 
     public function startGravityDiagnostic(): array {
-        return $this->gravity->startDiagnostic();
+        $result = $this->gravity->startDiagnostic();
+        if ( ! empty($result['started']) ) {
+            $this->rememberExecutionRelationship(
+                'gravity_diagnostic_session_created',
+                $result['observation']['session_id'] ?? null
+            );
+        }
+
+        return $result;
     }
 
     public function startGravityFlowInboxObservation(): array {
@@ -191,22 +210,23 @@ final class Manager {
 
         $snapshot = [
             'meta'          => [
-                'version'                   => WDDTF_VERSION,
-                'timestamp'                 => gmdate('c'),
-                'elapsed_ms'                => round($elapsed, 2),
-                'memory_peak'               => memory_get_peak_usage(true),
-                'memory_delta'              => memory_get_peak_usage(true) - $this->startedMemory,
-                'php_version'               => PHP_VERSION,
-                'wp_version'                => get_bloginfo('version'),
-                'admin'                     => is_admin(),
-                'execution_correlation_ref' => $this->executionCorrelation->current(),
-                'context'                   => [
+                'version'                       => WDDTF_VERSION,
+                'timestamp'                     => gmdate('c'),
+                'elapsed_ms'                    => round($elapsed, 2),
+                'memory_peak'                   => memory_get_peak_usage(true),
+                'memory_delta'                  => memory_get_peak_usage(true) - $this->startedMemory,
+                'php_version'                   => PHP_VERSION,
+                'wp_version'                    => get_bloginfo('version'),
+                'admin'                         => is_admin(),
+                'execution_correlation_ref'     => $this->executionCorrelation->current(),
+                'exact_reference_relationships' => $this->executionRelationships,
+                'context'                       => [
                     'is_ajax' => wp_doing_ajax(),
                     'is_rest' => defined('REST_REQUEST') && REST_REQUEST,
                     'is_cron' => defined('DOING_CRON') && DOING_CRON,
                 ],
-                'theme'                     => Env::activeTheme(),
-                'opcache'                   => Env::opcache(),
+                'theme'                         => Env::activeTheme(),
+                'opcache'                       => Env::opcache(),
             ],
             'timeline'      => $timeline,
             'http_requests' => $httpData,
@@ -239,6 +259,31 @@ final class Manager {
         $report = get_transient('wddtf_last_report');
 
         return is_array($report) ? $report : [];
+    }
+
+    private function rememberExecutionRelationship(string $kind, mixed $reference): void {
+        $executionRef = $this->executionCorrelation->current();
+        if (
+            null === $executionRef ||
+            ! is_string($reference) ||
+            '' === $reference ||
+            strlen($reference) > 128 ||
+            count($this->executionRelationships) >= self::MAX_EXECUTION_RELATIONSHIPS
+        ) {
+            return;
+        }
+
+        foreach ( $this->executionRelationships as $relationship ) {
+            if ( ($relationship['kind'] ?? null) === $kind && ($relationship['reference'] ?? null) === $reference ) {
+                return;
+            }
+        }
+
+        $this->executionRelationships[] = [
+            'kind' => $kind,
+            'execution_correlation_ref' => $executionRef,
+            'reference' => $reference,
+        ];
     }
 
     private function supportsExecutionCorrelation(): bool {
