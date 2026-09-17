@@ -55,6 +55,8 @@ final class ExecutionCorrelationTest extends TestCase {
         $GLOBALS['wddtf_test_schedule_result'] = true;
         $GLOBALS['wddtf_test_hide_scheduled_events'] = false;
         $GLOBALS['wddtf_test_is_ajax'] = false;
+        $GLOBALS['wddtf_test_is_admin'] = false;
+        $GLOBALS['wddtf_test_did_actions'] = [];
 
         // Replace any active context left by an earlier test without generating a reference.
         ( new ExecutionCorrelationContext(static fn(int $length): string => str_repeat("\0", $length)) )->activate(false);
@@ -62,6 +64,7 @@ final class ExecutionCorrelationTest extends TestCase {
 
     protected function tearDown(): void {
         $GLOBALS['wddtf_test_is_ajax'] = false;
+        $GLOBALS['wddtf_test_is_admin'] = false;
     }
 
     public function test_supported_execution_generates_exactly_one_bounded_opaque_reference(): void {
@@ -74,7 +77,7 @@ final class ExecutionCorrelationTest extends TestCase {
         );
 
         $first = $context->activate(true);
-        $second = $context->establish();
+        $second = $context->support();
 
         self::assertSame($first, $second);
         self::assertSame(1, $calls);
@@ -101,7 +104,7 @@ final class ExecutionCorrelationTest extends TestCase {
         );
 
         self::assertNull($context->activate(true));
-        self::assertNull($context->establish());
+        self::assertNull($context->support());
         self::assertSame(1, $calls);
         self::assertNull(ProviderRuntimeContext::currentExecutionCorrelationRef());
     }
@@ -125,18 +128,92 @@ final class ExecutionCorrelationTest extends TestCase {
         self::assertMatchesRegularExpression('/^dx1_[A-Za-z0-9_-]{16}$/D', $ref);
     }
 
-    public function test_manager_exposes_same_read_only_reference_to_provider_during_supported_request(): void {
-        $context = new ExecutionCorrelationContext(static fn(int $length): string => str_repeat("\x04", $length));
+    public function test_front_controller_context_is_unknown_until_authoritative_parse_request_boundary(): void {
+        $calls = 0;
+        $context = new ExecutionCorrelationContext(
+            static function(int $length) use (&$calls): string {
+                ++$calls;
+                return str_repeat("\x04", $length);
+            }
+        );
         $manager = new Manager(null, null, null, $context);
         $manager->boot();
 
-        self::assertSame($context->current(), ProviderRuntimeContext::currentExecutionCorrelationRef());
-        self::assertNotNull(ProviderRuntimeContext::currentExecutionCorrelationRef());
+        self::assertNull($context->current());
+        self::assertNull(ProviderRuntimeContext::currentExecutionCorrelationRef());
+        self::assertSame(0, $calls);
+
+        self::runAction('parse_request');
+        $ref = ProviderRuntimeContext::currentExecutionCorrelationRef();
+
+        self::assertIsString($ref);
+        self::assertSame($ref, $context->current());
+        self::assertSame($ref, $context->support());
+        self::assertSame(1, $calls);
+        self::assertMatchesRegularExpression('/^dx1_[A-Za-z0-9_-]{16}$/D', $ref);
     }
 
-    public function test_unsupported_ajax_request_exposes_no_fake_execution_reference(): void {
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function test_original_rest_timing_defect_stays_unexposed_before_and_after_rest_classification(): void {
+        $calls = 0;
+        $context = new ExecutionCorrelationContext(
+            static function(int $length) use (&$calls): string {
+                ++$calls;
+                return str_repeat("\x0B", $length);
+            }
+        );
+        $manager = new Manager(null, null, null, $context);
+        $manager->boot();
+
+        self::assertNull(ProviderRuntimeContext::currentExecutionCorrelationRef());
+        self::assertSame(0, $calls);
+
+        define('REST_REQUEST', true);
+        self::assertNull(ProviderRuntimeContext::currentExecutionCorrelationRef());
+
+        // Core normally terminates the REST dispatch at parse_request priority 10 before
+        // DEEP's priority-20 resolver. Invoking the DEEP resolver explicitly here proves it
+        // also fails closed if it is reached after REST_REQUEST becomes authoritative.
+        self::runAction('parse_request');
+
+        self::assertNull($context->current());
+        self::assertNull(ProviderRuntimeContext::currentExecutionCorrelationRef());
+        self::assertSame(0, $calls);
+    }
+
+    public function test_admin_init_supports_ordinary_admin_before_provider_facing_action_executes(): void {
+        $calls = 0;
+        $observed = null;
+        $GLOBALS['wddtf_test_is_admin'] = true;
+        $context = new ExecutionCorrelationContext(
+            static function(int $length) use (&$calls): string {
+                ++$calls;
+                return str_repeat("\x0C", $length);
+            }
+        );
+        $manager = new Manager(null, null, null, $context);
+        $manager->boot();
+        add_action(
+            'admin_post_wddtf_provider_probe',
+            static function() use (&$observed): void {
+                $observed = ProviderRuntimeContext::currentExecutionCorrelationRef();
+            }
+        );
+
+        self::assertNull(ProviderRuntimeContext::currentExecutionCorrelationRef());
+        self::runAction('admin_init');
+        self::runAction('admin_post_wddtf_provider_probe');
+
+        self::assertIsString($observed);
+        self::assertSame($context->current(), $observed);
+        self::assertSame(1, $calls);
+    }
+
+    public function test_unsupported_ajax_request_cannot_be_promoted_by_admin_init(): void {
         $calls = 0;
         $GLOBALS['wddtf_test_is_ajax'] = true;
+        $GLOBALS['wddtf_test_is_admin'] = true;
         $context = new ExecutionCorrelationContext(
             static function(int $length) use (&$calls): string {
                 ++$calls;
@@ -146,6 +223,30 @@ final class ExecutionCorrelationTest extends TestCase {
         $manager = new Manager(null, null, null, $context);
         $manager->boot();
 
+        self::assertNull($context->current());
+        self::assertNull(ProviderRuntimeContext::currentExecutionCorrelationRef());
+        self::runAction('admin_init');
+        self::assertNull($context->current());
+        self::assertNull(ProviderRuntimeContext::currentExecutionCorrelationRef());
+        self::assertSame(0, $calls);
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function test_cron_root_execution_remains_unsupported(): void {
+        define('DOING_CRON', true);
+        $calls = 0;
+        $context = new ExecutionCorrelationContext(
+            static function(int $length) use (&$calls): string {
+                ++$calls;
+                return str_repeat("\x0D", $length);
+            }
+        );
+        $manager = new Manager(null, null, null, $context);
+        $manager->boot();
+
+        self::runAction('admin_init');
+        self::runAction('parse_request');
         self::assertNull($context->current());
         self::assertNull(ProviderRuntimeContext::currentExecutionCorrelationRef());
         self::assertSame(0, $calls);
@@ -188,6 +289,7 @@ final class ExecutionCorrelationTest extends TestCase {
         $context = new ExecutionCorrelationContext(static fn(int $length): string => str_repeat("\x07", $length));
         $manager = new Manager(null, null, null, $context);
         $manager->boot();
+        self::runAction('parse_request');
         $ref = ProviderRuntimeContext::currentExecutionCorrelationRef();
         self::assertIsString($ref);
 
@@ -376,6 +478,7 @@ final class ExecutionCorrelationTest extends TestCase {
         $cron = new CronDiagnostics($store, static fn(): int => 1000);
         $manager = new Manager($cron, null, null, $context);
         $manager->boot();
+        self::runAction('parse_request');
 
         $result = $manager->startCronQualification();
         self::assertTrue($result['started']);
@@ -395,6 +498,7 @@ final class ExecutionCorrelationTest extends TestCase {
         $context = new ExecutionCorrelationContext(static fn(int $length): string => str_repeat("\x0A", $length));
         $manager = new Manager(null, null, null, $context);
         $manager->boot();
+        self::runAction('parse_request');
 
         $result = $manager->startGravityDiagnostic();
         self::assertTrue($result['started']);
@@ -404,6 +508,15 @@ final class ExecutionCorrelationTest extends TestCase {
         self::assertSame('gravity_diagnostic_session_created', $relationships[0]['kind']);
         self::assertSame($context->current(), $relationships[0]['execution_correlation_ref']);
         self::assertSame($result['observation']['session_id'], $relationships[0]['reference']);
+    }
+
+    private static function runAction(string $hook, mixed ...$args): void {
+        $callbacks = $GLOBALS['wddtf_test_actions'][$hook] ?? [];
+        usort($callbacks, static fn(array $a, array $b): int => $a[1] <=> $b[1]);
+        foreach ( $callbacks as [$callback, , $acceptedArgs] ) {
+            $callback(...array_slice($args, 0, max(0, $acceptedArgs)));
+        }
+        $GLOBALS['wddtf_test_did_actions'][$hook] = (int) ($GLOBALS['wddtf_test_did_actions'][$hook] ?? 0) + 1;
     }
 
     private function service(): ProviderEvidenceService {

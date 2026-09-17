@@ -69,7 +69,11 @@ $correlationRef = class_exists(\WDDTF\Providers\ProviderRuntimeContext::class)
     : null;
 ```
 
-The accessor does not invoke Provider callbacks, inspect Provider options/database state, or mutate Provider state. It returns `null` when DEEP has no supported ordinary execution context, including request classes whose normal DEEP report is intentionally not finalized. A Provider must not invent a replacement value when the accessor returns `null`.
+The request-local DEEP context exists before every request class is necessarily authoritative, but the accessor exposes a value only after DEEP has explicitly resolved the execution as supported. On normal wp-admin/admin-post execution this support boundary is `admin_init`, after AJAX/Cron exclusions are re-checked. On the normal front controller it is DEEP's `parse_request` callback after WordPress Core's REST loader; callers that run earlier in that front-controller lifecycle may therefore receive `null` even though the request later proves to be ordinary. They must not synthesize or cache a replacement identity.
+
+Standalone REST, AJAX, and Cron root executions remain unsupported and return `null`. In particular, a standalone REST request is not treated as ordinary merely because `REST_REQUEST` is still undefined during the early `plugins_loaded` phase. If a supported ordinary execution legitimately finalizes a normal DEEP report without passing through either lifecycle boundary, DEEP may establish the reference at finalization after the AJAX/REST/Cron exclusion has authoritatively passed; that retained report identity does not retroactively prove that an earlier Provider observed the reference.
+
+The accessor does not invoke Provider callbacks, inspect Provider options/database state, or mutate Provider state. A Provider must not invent a replacement value when the accessor returns `null`.
 
 When a Provider is already recording privacy-safe runtime or incident evidence in the same PHP execution, it may retain the exact opaque value unchanged and later return that same value as its snapshot or incident `correlation_ref`. Providers must never turn this value into a user or business identifier and must never place usernames, Entry/Form IDs, URLs, IP addresses, cookies, nonces, timestamps, database IDs, submitted values, credentials, secrets, or other PII into `correlation_ref`.
 
