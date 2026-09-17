@@ -30,21 +30,25 @@ final class Manager {
     private CronDiagnostics $cron;
     private GravityDiagnostics $gravity;
     private ProviderEvidenceService $providers;
+    private ExecutionCorrelationContext $executionCorrelation;
     private bool $finalized = false;
 
     public function __construct(
         ?CronDiagnostics $cron = null,
         ?GravityDiagnostics $gravity = null,
-        ?ProviderEvidenceService $providers = null
+        ?ProviderEvidenceService $providers = null,
+        ?ExecutionCorrelationContext $executionCorrelation = null
     ) {
+        $this->executionCorrelation = $executionCorrelation ?? new ExecutionCorrelationContext();
         $this->cron = $cron ?? new CronDiagnostics();
-        $this->gravity = $gravity ?? new GravityDiagnostics();
+        $this->gravity = $gravity ?? new GravityDiagnostics(null, null, null, null, $this->executionCorrelation);
         $this->providers = $providers ?? new ProviderEvidenceService();
     }
 
     public function boot(): void {
         $this->startedAt     = microtime(true);
         $this->startedMemory = memory_get_usage(true);
+        $this->executionCorrelation->activate($this->supportsExecutionCorrelation());
         $this->events        = new EventCollector();
         $this->http          = new HttpCollector();
         $this->queries       = new QueryCollector();
@@ -187,21 +191,22 @@ final class Manager {
 
         $snapshot = [
             'meta'          => [
-                'version'      => WDDTF_VERSION,
-                'timestamp'    => gmdate('c'),
-                'elapsed_ms'   => round($elapsed, 2),
-                'memory_peak'  => memory_get_peak_usage(true),
-                'memory_delta' => memory_get_peak_usage(true) - $this->startedMemory,
-                'php_version'  => PHP_VERSION,
-                'wp_version'   => get_bloginfo('version'),
-                'admin'        => is_admin(),
-                'context'      => [
+                'version'                   => WDDTF_VERSION,
+                'timestamp'                 => gmdate('c'),
+                'elapsed_ms'                => round($elapsed, 2),
+                'memory_peak'               => memory_get_peak_usage(true),
+                'memory_delta'              => memory_get_peak_usage(true) - $this->startedMemory,
+                'php_version'               => PHP_VERSION,
+                'wp_version'                => get_bloginfo('version'),
+                'admin'                     => is_admin(),
+                'execution_correlation_ref' => $this->executionCorrelation->current(),
+                'context'                   => [
                     'is_ajax' => wp_doing_ajax(),
                     'is_rest' => defined('REST_REQUEST') && REST_REQUEST,
                     'is_cron' => defined('DOING_CRON') && DOING_CRON,
                 ],
-                'theme'        => Env::activeTheme(),
-                'opcache'      => Env::opcache(),
+                'theme'                     => Env::activeTheme(),
+                'opcache'                   => Env::opcache(),
             ],
             'timeline'      => $timeline,
             'http_requests' => $httpData,
@@ -234,6 +239,12 @@ final class Manager {
         $report = get_transient('wddtf_last_report');
 
         return is_array($report) ? $report : [];
+    }
+
+    private function supportsExecutionCorrelation(): bool {
+        return ! wp_doing_ajax()
+            && ! (defined('REST_REQUEST') && REST_REQUEST)
+            && ! (defined('DOING_CRON') && DOING_CRON);
     }
 
     private function presentGravityHostVersions(array $gravity): array {
